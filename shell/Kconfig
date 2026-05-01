@@ -1,0 +1,14 @@
+config SHELL_PID
+    bool "PID shell command (pid set/show)"
+    default y
+    select CTL_PID
+    select DRI_SHELL
+    help
+        使能 pid shell 命令，运行时修改 PID 参数（双缓冲，不影响控制周期）
+
+config SHELL_DBG
+    bool "Chassis debug printk switch (dbg on/off)"
+    default y
+    select DRI_SHELL
+    help
+        使能 dbg shell 命令，运行时控制 chassis printk 输出
