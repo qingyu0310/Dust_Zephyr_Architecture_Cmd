@@ -2,15 +2,14 @@
 #include <string.h>
 #include <stdlib.h>
 #include "pid.hpp"
+#include "trd_chassis.hpp"
 
-namespace instance::chassis {
-    extern alg::pid::Pid pidCtrl;
-}
+static auto &pid = instance::chassis::wheel_pid[0].steer_torque;
 
 /* 读当前配置改单参数后 shadow-set */
 static void set_one(const struct shell *shell, const char *field, float val)
 {
-    auto cfg = instance::chassis::pidCtrl.GetConfig();
+    auto cfg = pid.GetConfig();
     bool ok = true;
 
     if      (strcmp(field, "kp")      == 0) cfg.kp      = val;
@@ -27,7 +26,7 @@ static void set_one(const struct shell *shell, const char *field, float val)
         return;
     }
 
-    instance::chassis::pidCtrl.SetShadow(cfg);
+    pid.SetShadow(cfg);
     shell_print(shell, "pid.%s = %.4f (shadow)", field, (double)val);
 }
 
@@ -38,12 +37,12 @@ static int cmd_pid_set(const struct shell *shell, size_t argc, char **argv)
         return 0;
     }
     if (argc == 4) {
-        auto cfg = instance::chassis::pidCtrl.GetConfig();
+        auto cfg = pid.GetConfig();
         cfg.kp = strtof(argv[1], nullptr);
         cfg.ki = strtof(argv[2], nullptr);
         cfg.kd = strtof(argv[3], nullptr);
 
-        instance::chassis::pidCtrl.SetShadow(cfg);
+        pid.SetShadow(cfg);
         shell_print(shell, "pid: kp=%.4f ki=%.4f kd=%.4f (shadow)",
                     (double)cfg.kp, (double)cfg.ki, (double)cfg.kd);
         return 0;
@@ -58,9 +57,9 @@ static int cmd_pid_set(const struct shell *shell, size_t argc, char **argv)
 static int cmd_pid_target(const struct shell *shell, size_t argc, char **argv)
 {
     if (argc == 2) {
-        instance::chassis::pidCtrl.SetTarget(strtof(argv[1], nullptr));
+        pid.SetTarget(strtof(argv[1], nullptr));
     }
-    shell_print(shell, "target = %.4f", (double)instance::chassis::pidCtrl.GetTarget());
+    shell_print(shell, "target = %.4f", (double)pid.GetTarget());
     return 0;
 }
 
@@ -68,8 +67,6 @@ static int cmd_pid_show(const struct shell *shell, size_t argc, char **argv)
 {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
-
-    const auto &pid = instance::chassis::pidCtrl;
 
     shell_print(shell, "kp=%.4f  ki=%.4f  kd=%.4f  kf=%.4f",
                 (double)pid.GetKp(), (double)pid.GetKi(),
