@@ -1,14 +1,18 @@
-config SHELL_PID
-    bool "PID shell command (pid set/show)"
-    default n
-    select CTL_PID
-    select DRI_SHELL
-    help
-        使能 pid shell 命令，运行时修改 PID 参数（双缓冲，不影响控制周期）
+# cmd/shell/Kconfig — Shell 命令扩展
+# 定义运行时调试命令，如 PID 参数在线调整、调试输出开关
+# 每个命令 select DRI_SHELL 以自动启用 shell 子系统
 
-config SHELL_DBG
-    bool "Chassis debug printk switch (dbg on/off)"
-    default n
-    select DRI_SHELL
-    help
-        使能 dbg shell 命令，运行时控制 chassis printk 输出
+# config SHELL_PID
+#     bool "PID shell command (pid set/show)"
+#     default n
+#     select CTL_PID
+#     select DRI_SHELL
+#     help
+#         使能 pid shell 命令，运行时修改 PID 参数（双缓冲，不影响控制周期）
+
+# config SHELL_DBG
+#     bool "Chassis debug printk switch (dbg on/off)"
+#     default n
+#     select DRI_SHELL
+#     help
+#         使能 dbg shell 命令，运行时控制 chassis printk 输出
