@@ -25,13 +25,13 @@ cmd/
 └── shell/
 ```
 
-build/
-    独立编译脚本（bat / ps1），用于 Zephyr 环境外单独编译或离线检查。
-    不属于固件的一部分。
+### build/
 
-shell/
-    Zephyr shell 命令实现。每个文件通过 CONFIG_SHELL_XXX 控制编译。
-    运行时通过串口终端修改参数、查看状态。
+独立编译脚本（bat / ps1），用于 Zephyr 环境外单独编译或离线检查。不属于固件的一部分。
+
+### shell/
+
+Zephyr shell 命令实现。每个文件通过 CONFIG_SHELL_XXX 控制编译。运行时通过串口终端修改参数、查看状态。
 
 ## 文件规范
 
