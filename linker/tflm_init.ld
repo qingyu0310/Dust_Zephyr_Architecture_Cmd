@@ -32,3 +32,17 @@ SECTION_PROLOGUE(.can_rx3,,)
     KEEP(*(.can_rx3))
     __can_rx3_end = .;
 } GROUP_LINK_IN(ROMABLE_REGION)
+
+SECTION_PROLOGUE(.remote,,)
+{
+    __remote_start = .;
+    KEEP(*(.remote))
+    __remote_end = .;
+} GROUP_LINK_IN(ROMABLE_REGION)
+
+SECTION_PROLOGUE(.imu,,)
+{
+    __imu_start = .;
+    KEEP(*(.imu))
+    __imu_end = .;
+} GROUP_LINK_IN(ROMABLE_REGION)
