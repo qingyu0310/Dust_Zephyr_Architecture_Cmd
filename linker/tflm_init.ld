@@ -46,3 +46,10 @@ SECTION_PROLOGUE(.imu,,)
     KEEP(*(.imu))
     __imu_end = .;
 } GROUP_LINK_IN(ROMABLE_REGION)
+
+SECTION_PROLOGUE(.shell_var,,)
+{
+    __shell_var_start = .;
+    KEEP(*(.shell_var))
+    __shell_var_end = .;
+} GROUP_LINK_IN(ROMABLE_REGION)

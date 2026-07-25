@@ -1,0 +1,8 @@
+config CMD_SHELL_VAR
+    bool "Enable debug variable interaction (l/g/s commands)"
+    select COM_UART_DMA
+    default n
+    help
+        Enable a self-maintained UART polling thread for debug variable
+        interaction. Commands: l (list), g <name> (get), s <name> <v> (set).
+        Threads register variables via REGISTER_SHELL_VAR().
