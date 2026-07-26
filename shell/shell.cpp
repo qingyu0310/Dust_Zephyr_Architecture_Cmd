@@ -304,9 +304,7 @@ void DbgConsole::Task()
     }
 }
 
-} // namespace debug
-
-static debug::DbgConsole dbg_console;
+static DbgConsole dbg_console;
 
 /**
  * @brief 初始化 console UART 和 dbg 控制台
@@ -340,3 +338,7 @@ static bool thread_start()
 
 REGISTER_INIT(thread_init,  PreInit,   High, "dbg_init");
 REGISTER_INIT(thread_start, AppThread, Low,  "dbg_start");
+
+} // namespace debug
+
+

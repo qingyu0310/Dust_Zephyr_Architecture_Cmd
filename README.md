@@ -8,6 +8,7 @@
 cmd/
 ├── README.md
 ├── shell/             ← 调试变量 shell
+├── buzzer/            ← PWM 蜂鸣器
 ├── linker/            ← 链接段定义
 ├── build/             ← 编译脚本
 ├── CMakeLists.txt
@@ -114,6 +115,53 @@ uart_->Read(buf, sizeof(buf));
 | 类型安全 | decltype 自动推导 | 字符串手动解析 |
 | 链接段 | 编译期收集 | 运行时注册 |
 
+## buzzer/ — PWM 蜂鸣器
+
+蜂鸣器控制类，基于 PWM 发声，提供短路鸣、长鸣、紧急报警接口。
+
+### 头文件常包含
+
+`buzzer.hpp` 始终被 include（不依赖 CONFIG 开关），宏定义由 `#ifdef CONFIG_CMD_BUZZER` 控制：
+
+```cpp
+#ifdef CONFIG_CMD_BUZZER
+
+class Buzzer { ... };
+inline Buzzer& Instance();
+#define EXEC_BUZZER_SHORT()    buzzer::Instance().Short()
+#define EXEC_BUZZER_LONG()     buzzer::Instance().Long()
+#define EXEC_BUZZER_ERR(...)   buzzer::Instance().Err(__VA_ARGS__)
+
+#else
+
+#define EXEC_BUZZER_SHORT()
+#define EXEC_BUZZER_LONG()
+#define EXEC_BUZZER_ERR(...)
+
+#endif
+```
+
+**用意：** 调用方（如 Init_entry.cpp）无条件 `#include "buzzer.hpp"`，宏始终可展开。开启时执行实际动作，关闭时展开为空，不产生代码。
+
+REGISTER_INIT 不放入头文件宏，直接写在 buzzer.cpp 里。buzzer.cpp 由 CONFIG_CMD_BUZZER 控制编译，不编译时 init 自然不存在。
+
+### API
+
+| 函数/宏 | 说明 |
+|---------|------|
+| `Init(spec)` | 初始化 PWM |
+| `On()` / `Off()` | 持续发声 / 停止 |
+| `Short()` | 短鸣两声（阻塞） |
+| `Long()` | 长鸣两声（阻塞） |
+| `Err(pattern)` | 紧急报警，循环 On() + pattern |
+| `Beep(ms, count)` | 底层层单次发声 |
+| `Instance()` | 全局实例 |
+| `EXEC_BUZZER_SHORT/LONG/ERR` | 宏封装 |
+
+### 应用
+
+初始化阶段完成时调用 `EXEC_BUZZER_SHORT()` 提示。初始化失败 halt 时调用 `EXEC_BUZZER_ERR(nullptr)` 持续蜂鸣。
+
 ## linker/ — 链接段定义
 
 `tflm_init.ld` 集中管理所有编译期收集段的边界符号。每个段使用 `SECTION_PROLOGUE` + `KEEP` 确保链接器不会优化掉。
@@ -157,4 +205,6 @@ PowerShell 版，`-Name` 指定板级配置，`-Opts` 传额外参数。
 
 - **零入侵业务代码** — 业务方一行宏注册，不需要改框架
 - **编译期收集** — 新增变量不需要中心化注册表
+- **头文件常包含** — 宏始终可用，Kconfig 控制展开内容
+- **编译单元控制 init** — REGISTER_INIT 写在 .cpp 里，由 Kconfig 编译条件决定是否注册
 - **自包含** — 每个 cmd 独立持有自己的资源（UART、线程），不依赖 project/thread/ 的业务启动链

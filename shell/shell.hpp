@@ -10,6 +10,8 @@
 
 #pragma once
 
+#ifdef CONFIG_CMD_SHELL_VAR
+
 #include <cstdint>
 #include <zephyr/kernel.h>
 #include "uart.hpp"
@@ -145,3 +147,9 @@ template<> struct TypeMap<bool>     { static constexpr auto type = VarType::Bool
                   "shell var \"" name_ "\" is too large for VarValue")
 
 } // namespace debug
+
+#else
+
+#define REGISTER_SHELL_VAR(name_, var_)
+
+#endif
