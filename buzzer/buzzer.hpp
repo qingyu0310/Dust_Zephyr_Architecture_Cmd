@@ -65,6 +65,6 @@ inline Buzzer& Instance()
 
 #define EXEC_BUZZER_SHORT()
 #define EXEC_BUZZER_LONG()
-#define EXEC_BUZZER_ERR(...)
+#define EXEC_BUZZER_ERR(...)    while(1) {}
 
 #endif
