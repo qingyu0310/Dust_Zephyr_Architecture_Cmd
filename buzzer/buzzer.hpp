@@ -30,7 +30,7 @@ class Buzzer final
 public:
     Buzzer() = default;
 
-    bool Init(const struct pwm_dt_spec &spec, uint32_t freq_hz = 2000, float volume = 0.5f);
+    bool Init(const struct pwm_dt_spec &spec, uint32_t freq_hz = 1000, float volume = 0.5f);
     bool On();
     bool Off();
     bool SetFreq(uint32_t freq_hz);

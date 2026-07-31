@@ -169,6 +169,7 @@ REGISTER_INIT 不放入头文件宏，直接写在 buzzer.cpp 里。buzzer.cpp �
 | 段名 | 用途 | 遍历符号 |
 |------|------|---------|
 | `.user_init` | REGISTER_INIT 初始化项 | `__user_init_start/end` |
+| `.user_thread` | REGISTER_THREAD 线程启动项 | `__user_thread_start/end` |
 | `.can_rx1/2/3` | CAN_RX_HANDLER 接收分发 | `__can_rx1/2/3_start/end` |
 | `.remote` | Remote 模块入口 | `__remote_start/end` |
 | `.imu` | IMU 模块入口 | `__imu_start/end` |
@@ -187,7 +188,7 @@ build <board_cfg> [west-args...]
 ```
 
 - **默认板级**：`hpm6e00evk`
-- **自动检索**：扫描 `projects/boards/*/<board_cfg>/` 下是否有 `.overlay`，找到后自动提取 board 目标名（如 `hpm5361icb`），并追加 `-- -DBOARD_CFG=<board_cfg>` 传给 CMake
+- **自动检索**：扫描 `project/boards/*/<board_cfg>/` 下是否有 `.overlay`，找到后自动提取 board 目标名（如 `hpm5361icb`），并追加 `-- -DBOARD_CFG=<board_cfg>` 传给 CMake
 - **fallback**：找不到 overlay 时直接按 `<board_cfg>` 作为 board 名编译
 
 示例：

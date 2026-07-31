@@ -12,6 +12,13 @@ SECTION_PROLOGUE(.user_init,,)
     __user_init_end = .;
 } GROUP_LINK_IN(ROMABLE_REGION)
 
+SECTION_PROLOGUE(.user_thread,,)
+{
+    __user_thread_start = .;
+    KEEP(*(.user_thread))
+    __user_thread_end = .;
+} GROUP_LINK_IN(ROMABLE_REGION)
+
 SECTION_PROLOGUE(.can_rx1,,)
 {
     __can_rx1_start = .;

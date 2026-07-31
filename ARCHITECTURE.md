@@ -191,11 +191,11 @@ shell 线程不认识具体业务线程
 
 独立维护线程不等于绕开系统启动。
 
-当前 `shell.cpp` 仍然使用 `REGISTER_INIT()` 接入 `.user_init`：
+当前 `shell.cpp` 使用 `REGISTER_INIT()` 接入 `.user_init`，使用 `REGISTER_THREAD()` 接入 `.user_thread`：
 
 ```cpp
 REGISTER_INIT(thread_init,  PreInit,    High, "dbg_init");
-REGISTER_INIT(thread_start, LateThread, Low,  "dbg_start");
+REGISTER_THREAD(thread_start, LateThread, Low,  "dbg_start");
 ```
 
 也就是说：
@@ -203,7 +203,7 @@ REGISTER_INIT(thread_start, LateThread, Low,  "dbg_start");
 - UART DMA 初始化发生在 `PreInit`；
 - shell 线程启动发生在 `LateThread`；
 - 初始化失败策略由 `InitLevel` 表达；
-- 启动顺序仍由 `project/apps/Init_entry.cpp` 统一遍历。
+- 启动顺序仍由 `init/Init_entry.cpp` 统一遍历。
 
 这保持了两个边界：
 

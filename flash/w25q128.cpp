@@ -11,6 +11,7 @@
 
 #include "w25q128.hpp"
 #include "Init_entry.hpp"
+#include <cstdlib>
 #include <cstring>
 #include <zephyr/kernel.h>
 
@@ -225,16 +226,29 @@ bool W25Q128::Read(uint32_t addr, void *data, uint32_t len)
 {
     if (data == nullptr || len == 0) return false;
 
-    uint8_t hdr[4];
+    // 单次 Transceive，heap 分配，精确匹配长度
+    const uint32_t total = 4 + len;
 
-    hdr[0] = kCmdReadData;
-    hdr[1] = static_cast<uint8_t>((addr >> 16) & 0xFF);
-    hdr[2] = static_cast<uint8_t>((addr >>  8) & 0xFF);
-    hdr[3] = static_cast<uint8_t>( addr        & 0xFF);
+    auto tx = (uint8_t*)malloc(total);
+    auto rx = (uint8_t*)malloc(total);
+    if (tx == nullptr || rx == nullptr) {
+        free(tx);
+        free(rx);
+        return false;
+    }
 
-    if (!spi_.Send(hdr, 4)) return false;
+    tx[0] = kCmdReadData;
+    tx[1] = static_cast<uint8_t>((addr >> 16) & 0xFF);
+    tx[2] = static_cast<uint8_t>((addr >>  8) & 0xFF);
+    tx[3] = static_cast<uint8_t>( addr        & 0xFF);
+    memset(tx + 4, 0xFF, total - 4);
 
-    return spi_.Read(static_cast<uint8_t*>(data), len);
+    bool ok = spi_.Transceive(tx, rx, total);
+    if (ok) memcpy(data, rx + 4, len);
+
+    free(tx);
+    free(rx);
+    return ok;
 }
 
 /**
@@ -249,17 +263,29 @@ bool W25Q128::FastRead(uint32_t addr, void *data, uint32_t len)
 {
     if (data == nullptr || len == 0) return false;
 
-    uint8_t hdr[5];
+    const uint32_t total = 5 + len;
 
-    hdr[0] = kCmdFastRead;
-    hdr[1] = static_cast<uint8_t>((addr >> 16) & 0xFF);
-    hdr[2] = static_cast<uint8_t>((addr >>  8) & 0xFF);
-    hdr[3] = static_cast<uint8_t>( addr        & 0xFF);
-    hdr[4] = 0xFF;  // dummy byte
+    auto tx = (uint8_t*)malloc(total);
+    auto rx = (uint8_t*)malloc(total);
+    if (tx == nullptr || rx == nullptr) {
+        free(tx);
+        free(rx);
+        return false;
+    }
 
-    if (!spi_.Send(hdr, 5)) return false;
+    tx[0] = kCmdFastRead;
+    tx[1] = static_cast<uint8_t>((addr >> 16) & 0xFF);
+    tx[2] = static_cast<uint8_t>((addr >>  8) & 0xFF);
+    tx[3] = static_cast<uint8_t>( addr        & 0xFF);
+    tx[4] = 0xFF;  // dummy
+    memset(tx + 5, 0xFF, total - 5);
 
-    return spi_.Read(static_cast<uint8_t*>(data), len);
+    bool ok = spi_.Transceive(tx, rx, total);
+    if (ok) memcpy(data, rx + 5, len);
+
+    free(tx);
+    free(rx);
+    return ok;
 }
 
 /**
