@@ -97,13 +97,12 @@ bool Buzzer::SetVolume(float vol)
  */
 void Buzzer::Beep(uint32_t duration_ms)
 {
-    const uint32_t us = duration_ms * 1000;
     On();
-    k_busy_wait(us);
+    k_msleep(duration_ms);
     Off();
-    k_busy_wait(us / 2);
+    k_msleep(duration_ms / 2);
     On();
-    k_busy_wait(us);
+    k_msleep(duration_ms);
     Off();
 }
 
