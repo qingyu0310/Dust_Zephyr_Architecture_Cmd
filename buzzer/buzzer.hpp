@@ -11,7 +11,7 @@
 
 #pragma once
 
-#ifdef CONFIG_CMD_BUZZER
+#ifdef CONFIG_DUST_CMD_BUZZER
 
 #include <cstdint>
 #include <type_traits>

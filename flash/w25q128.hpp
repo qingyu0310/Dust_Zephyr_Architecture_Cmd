@@ -11,7 +11,7 @@
 
 #pragma once
 
-#ifdef CONFIG_CMD_W25Q128
+#ifdef CONFIG_DUST_CMD_W25Q128
 
 #include <cstdint>
 #include "spi.hpp"

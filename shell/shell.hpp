@@ -10,7 +10,7 @@
 
 #pragma once
 
-#ifdef CONFIG_CMD_SHELL_VAR
+#ifdef CONFIG_DUST_CMD_SHELL_VAR
 
 #include <cstdint>
 #include <zephyr/kernel.h>
