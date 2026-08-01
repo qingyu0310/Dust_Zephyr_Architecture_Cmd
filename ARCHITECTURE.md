@@ -37,7 +37,7 @@ cmd/
 │   ├── build.bat
 │   └── build.ps1
 ├── linker/
-│   └── tflm_init.ld
+│   └── dust_init.ld
 ├── shell/
 │   ├── shell.hpp
 │   └── shell.cpp
@@ -606,7 +606,7 @@ endif()
 
 ## linker/ 的意义
 
-`cmd/linker/tflm_init.ld` 当前集中定义多个链接段：
+`cmd/linker/dust_init.ld` 当前集中定义多个链接段：
 
 | 段 | 用途 |
 | --- | --- |
