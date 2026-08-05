@@ -1,6 +1,12 @@
 target_include_directories(app PRIVATE shell)
-if(CONFIG_DUST_CMD_SHELL_VAR)
+if(CONFIG_DUST_CMD_SHELL)
     target_sources(app PRIVATE shell/shell.cpp)
+endif()
+if(CONFIG_DUST_CMD_SHELL_VAR)
+    target_sources(app PRIVATE shell/var.cpp)
+endif()
+if(CONFIG_DUST_CMD_SHELL_LOG)
+    target_sources(app PRIVATE shell/log.cpp)
 endif()
 
 target_include_directories(app PRIVATE buzzer)
