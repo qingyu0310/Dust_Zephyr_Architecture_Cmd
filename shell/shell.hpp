@@ -105,6 +105,9 @@ struct TypeMap
     static constexpr VarType type = VarType::Uint32;
 };
 
+template<typename T>
+struct TypeMap<T&> : TypeMap<T> {};
+
 
 template<> struct TypeMap<uint8_t>  { static constexpr auto type = VarType::Uint8;  };
 template<> struct TypeMap<int8_t>   { static constexpr auto type = VarType::Int8;   };
