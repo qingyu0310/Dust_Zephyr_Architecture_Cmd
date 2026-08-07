@@ -454,6 +454,6 @@ static bool flash_init()
     return w25q128::Instance().Init();
 }
 
-REGISTER_INIT(flash_init, PreInit, Mid, "w25q128");
+REGISTER_INIT(flash_init, PreInit, Mid, HaltOnFail, "w25q128");
 
 } // namespace w25q128

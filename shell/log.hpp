@@ -23,13 +23,13 @@ namespace debug {
 /**
  * @brief 日志颜色（ANSI 前景色编码）
  */
-enum class LogColor : uint8_t
+enum class LogColor : uint32_t
 {
-    Black  = 30,   // \x1b[30m（INF）
-    Red    = 91,   // \x1b[91m 亮红（ERR）
-    Green  = 92,   // \x1b[92m 亮绿（OK）
-    Orange = 93,   // \x1b[93m 亮黄（WRN）
-    White  = 37,   // \x1b[37m（DBG）
+    Black  = 0x000000,  // 黑（INF）
+    Red    = 0xF50002,  // 亮红（ERR）
+    Green  = 0x00F700,  // 亮绿（OK）
+    Orange = 0xF6A753,  // 亮橙（WRN）
+    White  = 0xFFFFFF,  // 白（DBG）
 };
 
 /**
@@ -37,9 +37,9 @@ enum class LogColor : uint8_t
  */
 enum class TxPriority : uint8_t
 {
-    Event = 0,   // INF/ERR/OK/WRN：最高，插队头，永不挤
-    Cmd   = 1,   // 命令响应（var/log 输出）：中，插事件后、DBG 前
-    Dbg   = 2,   // DBG 流式：最低，排队尾，先被挤
+    Event = 0,   								// INF/ERR/OK/WRN：最高，插队头，永不挤
+    Cmd   = 1,   								// 命令响应（var/log 输出）：中，插事件后、DBG 前
+    Dbg   = 2,   								// DBG 流式：最低，排队尾，先被挤
 };
 
 constexpr uint16_t kTxFrameSize   = 128;		// 发送帧数据区大小（含 \0 保险）
@@ -136,8 +136,8 @@ private:
     ::debug::Log::Dbgl(::debug::Log::FindOrCreate(name_), ##__VA_ARGS__)
 
 // 一次性四色（调用即打，无名字，用法与 LOG_INF 一致；输出前带 [等级] 前缀）
-// 每帧字节开销：16B = [inf]前缀(5) + 颜色 \x1b[91m(5) + 复位 \x1b[0m(4) + \r\n(2)；
-// 帧上限 127B（kTxMaxLen 截断）→ 内容建议 ≤111B，超出截尾
+// 每帧字节开销（TrueColor 38;2;R;G;B）：[inf]前缀(5) + 颜色(最长18 \x1b[38;2;246;167;83m) + 复位 \x1b[0m(4) + \r\n(2) = 最长29B；
+// 帧上限 127B（kTxMaxLen 截断）→ 内容建议 ≤98B，超出截尾
 #define DUST_LOG_INF(...) ::debug::Log::Inf("[inf] " __VA_ARGS__)
 #define DUST_LOG_ERR(...) ::debug::Log::Err("[err] " __VA_ARGS__)
 #define DUST_LOG_OK(...)  ::debug::Log::Ok("[ok] " __VA_ARGS__)

@@ -150,7 +150,7 @@ void Log::Dbgl(LogEntry* e, const char* fmt, ...)
     va_end(ap);
 
     char out[256 + 16];
-    int n = snprintf(out, sizeof(out), "\x1b[%dm%s\x1b[0m\r\n", static_cast<int>(LogColor::White), buf);
+    int n = snprintf(out, sizeof(out), "%s\r\n", buf);
     if (n > 0) TrySend(out, n, TxPriority::Dbg);   // DBG = 最低档（让位事件/命令）
 }
 
@@ -214,7 +214,8 @@ void Log::PrintColor(LogColor c, const char* fmt, va_list ap)
     vsnprintf(buf, sizeof(buf), fmt, ap);   // 格式化（picolibc 支持 %f，prj.conf 已开 PICOLIBC_IO_FLOAT）
 
     char out[256 + 16];
-    int n = snprintf(out, sizeof(out), "\x1b[%dm%s\x1b[0m\r\n", static_cast<int>(c), buf);
+    const uint32_t rgb = static_cast<uint32_t>(c);
+    int n = snprintf(out, sizeof(out), "\x1b[38;2;%d;%d;%dm%s\x1b[0m\r\n", (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, buf);
     if (n > 0) TrySend(out, n, TxPriority::Event);   // 四色直发 = 事件档（最高）
 }
 

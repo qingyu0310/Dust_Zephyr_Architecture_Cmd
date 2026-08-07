@@ -160,7 +160,7 @@ static bool thread_start()
     return true;
 }
 
-REGISTER_INIT  (thread_init,  PreInit,    High, "dbg_init");
-REGISTER_THREAD(thread_start, LateThread, Low,  "dbg_start");
+REGISTER_INIT  (thread_init,  PreInit,    High, HaltOnFail, "dbg_init");
+REGISTER_THREAD(thread_start, LateThread, "dbg_start");
 
 } // namespace debug
