@@ -18,6 +18,11 @@
 
 namespace debug {
 
+// 日志行格式化/输出缓冲（vsnprintf/snprintf 目标）
+constexpr uint16_t kLogBufSize    = 256;		// 格式化缓冲：可变参数展开目标（超 255 截断）
+constexpr uint16_t kColorOutExtra = 16;			// 颜色输出缓冲额外预留（ANSI 转义 + \r\n）
+constexpr uint16_t kLineOutExtra  = 4;			// 行输出缓冲额外预留（\r\n）
+
 /**
  * @brief 初始化日志系统
  *
@@ -143,13 +148,13 @@ void Log::Dbgl(LogEntry* e, const char* fmt, ...)
     if (e == nullptr) return;               // 池满（FindOrCreate 返回 nullptr）：静默丢弃
     if (e != active_) return;               // 未选中，静默
 
-    char buf[256];
+    char buf[kLogBufSize];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
 
-    char out[256 + 16];
+    char out[kLogBufSize + kColorOutExtra];
     int n = snprintf(out, sizeof(out), "%s\r\n", buf);
     if (n > 0) TrySend(out, n, TxPriority::Dbg);   // DBG = 最低档（让位事件/命令）
 }
@@ -210,10 +215,10 @@ void Log::Wrn(const char* fmt, ...)
  */
 void Log::PrintColor(LogColor c, const char* fmt, va_list ap)
 {
-    char buf[256];
+    char buf[kLogBufSize];
     vsnprintf(buf, sizeof(buf), fmt, ap);   // 格式化（picolibc 支持 %f，prj.conf 已开 PICOLIBC_IO_FLOAT）
 
-    char out[256 + 16];
+    char out[kLogBufSize + kColorOutExtra];
     const uint32_t rgb = static_cast<uint32_t>(c);
     int n = snprintf(out, sizeof(out), "\x1b[38;2;%d;%d;%dm%s\x1b[0m\r\n", (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, buf);
     if (n > 0) TrySend(out, n, TxPriority::Event);   // 四色直发 = 事件档（最高）
@@ -225,7 +230,7 @@ void Log::PrintColor(LogColor c, const char* fmt, va_list ap)
  */
 void Log::SendLine(const char* text)
 {
-    char out[256 + 4];
+    char out[kLogBufSize + kLineOutExtra];
     int n = snprintf(out, sizeof(out), "%s\r\n", text);
     if (n > 0) TrySend(out, n, TxPriority::Cmd);   // 命令响应 = 中档（事件后、DBG 前）
 }

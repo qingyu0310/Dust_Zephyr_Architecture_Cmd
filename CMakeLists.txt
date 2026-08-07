@@ -18,3 +18,6 @@ target_include_directories(app PRIVATE flash)
 if(CONFIG_DUST_CMD_W25Q128)
     target_sources(app PRIVATE flash/w25q128.cpp)
 endif()
+
+target_include_directories(app PRIVATE fatal)
+target_sources(app PRIVATE fatal/fatal.cpp)

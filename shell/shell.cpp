@@ -144,6 +144,7 @@ static bool thread_init()
     }
 
     if (!shell_.Init(rx)) return false;
+	DUST_LOG_INF("shell uart init\n");
 
     Log::Init();
     Log::BindUart(&rx);
@@ -160,7 +161,7 @@ static bool thread_start()
     return true;
 }
 
-REGISTER_INIT  (thread_init,  PreInit,    High, HaltOnFail, "dbg_init");
+REGISTER_INIT  (thread_init,  PreInit, High, HaltOnFail, "dbg_init");
 REGISTER_THREAD(thread_start, LateThread, "dbg_start");
 
 } // namespace debug

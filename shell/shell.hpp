@@ -34,7 +34,7 @@ public:
     bool Init(UartDma &uart);
     void Start(ThreadPrio prio = ThreadPrio::Lowest)
     {
-        thread_.Start(TaskEntry, prio, this);
+        thread_.Start(TaskEntry, prio, this, "shell");
     }
 
 private:

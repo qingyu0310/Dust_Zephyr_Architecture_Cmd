@@ -30,11 +30,11 @@
 **依赖链**：
 
 ```
-USE_CMD_VAR → DUST_CMD_SHELL_VAR ─┐
-                                  ├→ DUST_CMD_SHELL → DUST_COM_UART_DMA
-USE_CMD_LOG → DUST_CMD_SHELL_LOG ─┘
+USE_CMD_SHELL → select DUST_CMD_SHELL_LOG ─┐
+             → select DUST_CMD_SHELL_VAR ─┴→ DUST_CMD_SHELL → DUST_COM_UART_DMA
 ```
 
+- 业务层 `USE_CMD_SHELL` 是总开关：select `DUST_CMD_SHELL_LOG` + `DUST_CMD_SHELL_VAR`，二者再各自 select `DUST_CMD_SHELL`
 - `DUST_CMD_SHELL` 是公共底座（线程 + 分发），`DUST_CMD_SHELL_VAR` / `DUST_CMD_SHELL_LOG` 各自 select 它
 - `log` 依赖 `shell`：`Log::Init()` / `Log::BindUart()` 在 shell 的 `dbg_init` 里执行——没有 shell 就没人初始化 Log（`uart_ == nullptr` 时发送静默丢弃）；`log` 命令也走 shell 的 `ProcessLine` 分发
 
