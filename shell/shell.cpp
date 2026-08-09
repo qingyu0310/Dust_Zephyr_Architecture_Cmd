@@ -14,6 +14,8 @@
 #include "log.hpp"
 #include "Init_entry.hpp"
 #include <cstring>
+#include "uart.hpp"
+#include "zephyr/kernel.h"
 
 #pragma message "Compiling Cmd/Shell/"
 
@@ -24,9 +26,9 @@ namespace debug {
  * @param uart 外部创建的 UART DMA 实例引用
  * @return true
  */
-bool Shell::Init(UartDma &uart)
+bool Shell::Init(Stream &stream)
 {
-    uart_ = &uart;
+    stream_ = &stream;
     return true;
 }
 
@@ -84,11 +86,19 @@ void Shell::Task()
 {
     for (;;)
     {
-        k_sem_take(&uart_->sem_, K_FOREVER);
+        k_sem_take(&stream_->sem_, K_FOREVER);   		 			// 通道事件：接收数据 OR 日志发送需要驱动
+
+        Log::PumpSend();                          								// 先驱动日志发送（DMA 空闲则续发）
+
+        while (auto* r = Log::DequeueRecord())    					// 出队参数快照请求 → 展开入帧池 → 泵
+        {
+            Log::FormatRecord(r);
+            Log::PumpSend();
+        }
 
         uint8_t buf[32];
-        uint16_t n = uart_->Read(buf, sizeof(buf));
-        if (n == 0) continue;
+        uint16_t n = stream_->Read(buf, sizeof(buf));
+        if (n == 0) continue;                     								// 发送唤醒，无接收数据
 
         for (uint16_t i = 0; i < n; i++)
         {
@@ -137,17 +147,15 @@ static bool thread_init()
     cfg.line_cfg.baudrate = 921600;
     cfg.base_cfg.tx_cb    = Log::OnTxDone;
 
-    if (!rx.Init(DEVICE_DT_GET(DT_ALIAS(shell_uart)), cfg))
-    {
-        Log::Err("console uart init failed");
-        return false;
-    }
+    if (!rx.Init(DEVICE_DT_GET(DT_ALIAS(shell_uart)), cfg)) return false;
 
     if (!shell_.Init(rx)) return false;
-	DUST_LOG_INF("shell uart init\n");
 
-    Log::Init();
-    Log::BindUart(&rx);
+	Log::Init();
+    Log::BindStream(&rx);
+
+	DUST_LOG_INF("shell init");
+
     return true;
 }
 
@@ -158,10 +166,12 @@ static bool thread_init()
 static bool thread_start()
 {
     shell_.Start();
+	Log::SetShellOwn();                       									// 首次运行即接管发送（重复置 true 无害）
+	DUST_LOG_INF("shell send owner taken"); 									// 发送模式切换：调用点直发 → shell 线程驱动
     return true;
 }
 
 REGISTER_INIT  (thread_init,  PreInit, High, HaltOnFail, "dbg_init");
-REGISTER_THREAD(thread_start, LateThread, "dbg_start");
+REGISTER_THREAD(thread_start, PreThread, "dbg_start");
 
 } // namespace debug

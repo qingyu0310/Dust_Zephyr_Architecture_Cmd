@@ -15,7 +15,7 @@
 
 #include <cstdint>
 #include <zephyr/kernel.h>
-#include "uart.hpp"
+#include "stream.hpp"
 #include "thread.hpp"
 
 namespace debug
@@ -31,7 +31,7 @@ namespace debug
 class Shell final
 {
 public:
-    bool Init(UartDma &uart);
+    bool Init(Stream &stream);
     void Start(ThreadPrio prio = ThreadPrio::Lowest)
     {
         thread_.Start(TaskEntry, prio, this, "shell");
@@ -40,7 +40,7 @@ public:
 private:
     static constexpr size_t kLineBufSize = 128;
 
-    UartDma           *uart_     = nullptr;
+    Stream            *stream_   = nullptr;
     uint8_t            line_buf_[kLineBufSize]{};
     uint32_t           line_pos_ = 0;
     Thread<2048>       thread_   {};
