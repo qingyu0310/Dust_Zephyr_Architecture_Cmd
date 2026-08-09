@@ -34,21 +34,31 @@ static const char* FatalReasonStr(unsigned int reason)
 /**
  * @brief 覆盖 Zephyr 弱定义致命错误处理器，让栈溢出经 DUST_LOG 可见
  * @param reason 致命错误原因（K_ERR_*，栈溢出 = K_ERR_STACK_CHK_FAIL=2）
- * @param esf    异常栈帧（含 mepc/mstatus）
+ * @param esf    异常栈帧（riscv 含 mepc/mstatus，ARM 含 pc/xpsr）
  *
  * Zephyr 默认实现走 LOG_ERR + printk，本项目 CONFIG_LOG/CONSOLE 关闭导致
- * 输出被吞。覆盖后用 DUST_LOG_ERR 上报原因 + 线程名 + mcause/mepc：
- * PMP 栈溢出触发 mcause=5/7（load/store access fault）。打印后停机等待
- * 复位，不重启以保留现场。
+ * 输出被吞。覆盖后用 DUST_LOG_ERR 上报原因 + 线程名 + 现场寄存器：
+ * riscv 打印 mcause/mepc/mstatus（PMP 栈溢出 mcause=5/7），ARM 打印
+ * pc/xpsr。打印后停机等待复位，不重启以保留现场。
  */
 extern "C" void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
 {
+    const char* thread = k_thread_name_get(k_current_get());
+
+#if defined(CONFIG_CPU_CORTEX_M)
+    DUST_LOG_ERR("[fatal] %s (reason=%u) thread=%s pc=%lx xpsr=%lx",
+                 FatalReasonStr(reason), reason, (thread != nullptr) ? thread : "?",
+                 (unsigned long)esf->basic.pc, (unsigned long)esf->basic.xpsr);
+#elif defined(CONFIG_RISCV)
     unsigned long mcause = 0;
     __asm__ volatile("csrr %0, mcause" : "=r"(mcause));
-
-    const char* thread = k_thread_name_get(k_current_get());
     DUST_LOG_ERR("[fatal] %s (reason=%u) thread=%s mcause=%lx mepc=%lx mstatus=%lx",
-                 FatalReasonStr(reason), reason, (thread != nullptr) ? thread : "?", mcause, esf->mepc, esf->mstatus);
+                 FatalReasonStr(reason), reason, (thread != nullptr) ? thread : "?",
+                 mcause, esf->mepc, esf->mstatus);
+#else
+    DUST_LOG_ERR("[fatal] %s (reason=%u) thread=%s",
+                 FatalReasonStr(reason), reason, (thread != nullptr) ? thread : "?");
+#endif
 
     while (1) {}
 }

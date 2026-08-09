@@ -15,7 +15,7 @@
 #include "Init_entry.hpp"
 #include <cstring>
 
-#pragma message "Compiling Cmd/Shell/Debug"
+#pragma message "Compiling Cmd/Shell/"
 
 namespace debug {
 
