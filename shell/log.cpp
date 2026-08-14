@@ -466,7 +466,7 @@ void Log::EnqueueByPrio(TxFrame* f)
     f->next = kNullIndex;
     if (tx_head_ == kNullIndex) { tx_head_ = tx_tail_ = static_cast<uint8_t>(f - tx_pool_); return; }
 
-    uint8_t* pp = &tx_head_;              // 找插入点：第一个 prio > f->prio 的帧之前
+    uint8_t* pp = &tx_head_;              			// 找插入点：第一个 prio > f->prio 的帧之前
     while (*pp != kNullIndex && tx_pool_[*pp].prio <= f->prio)
         pp = &tx_pool_[*pp].next;
 
@@ -497,8 +497,12 @@ TxFrame* Log::EvictLowest()
     }
     if (victim == kNullIndex) return nullptr;     // 全是事件帧（极端）→ 无可挤
 
-    if (victim_prev == kNullIndex) tx_head_ = tx_pool_[victim].next;
-    else                           tx_pool_[victim_prev].next = tx_pool_[victim].next;
+    if (victim_prev == kNullIndex) {
+		tx_head_ = tx_pool_[victim].next;
+	} else {
+		tx_pool_[victim_prev].next = tx_pool_[victim].next;
+	}                           
+	 	
     if (tx_pool_[victim].next == kNullIndex) tx_tail_ = victim_prev;
 
     tx_pool_[victim].next = kNullIndex;
@@ -574,6 +578,16 @@ bool Log::EnqueueFrame(const char* data, int len, TxPriority prio)
     return true;
 }
 
+/**
+ * @brief 直发原语：入帧池 + 立即 SendFrame（调用点直发）
+ *
+ * 入队成功后若 DMA 空闲，调用点直接弹帧提交发送（帧即取即还），
+ * 不依赖 shell 线程泵。用于命令响应 / boot 早期同步段直发路径。
+ *
+ * @param data 发送内容（已格式化，可能含 ANSI 颜色）
+ * @param len  数据长度
+ * @param prio 优先级档位
+ */
 void Log::PublishDirect(const char* data, int len, TxPriority prio)
 {
     unsigned key = irq_lock();            // 并发保护
@@ -590,6 +604,16 @@ void Log::PublishDirect(const char* data, int len, TxPriority prio)
     irq_unlock(key);
 }
 
+/**
+ * @brief 异步原语：入帧池 + give（shell 线程泵发送）
+ *
+ * 入队成功后若 DMA 空闲，give 唤醒 shell 线程去 PumpSend 续发。
+ * 用于异步段格式化后入队（FormatRecord 结果），DMA 提交交给 shell 线程。
+ *
+ * @param data 发送内容（已格式化，可能含 ANSI 颜色）
+ * @param len  数据长度
+ * @param prio 优先级档位
+ */
 void Log::PublishQueued(const char* data, int len, TxPriority prio)
 {
     unsigned key = irq_lock();            // 并发保护
