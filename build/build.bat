@@ -9,12 +9,23 @@ set "SDK_GLUE_DIR=E:\Zephyr_HPMicro\sdk_glue"
 set NAME=%1
 if "%NAME%"=="" set NAME=hpm6e00evk
 
-rem 直接检测：当前目录必须是项目根（含 CMakeLists.txt），build 产物放当前目录 build\
-if not exist "%CD%\CMakeLists.txt" (
-    echo [ERROR] 当前目录不是项目根（缺少 CMakeLists.txt）
-    echo         请先 cd 到项目根（zephyr_user\project 或 projects\name）再运行本脚本
+set "TARGET_DIR="
+if exist "%CD%\CMakeLists.txt" (
+    set "TARGET_DIR=%CD%"
+) else if exist "%CD%\project\CMakeLists.txt" (
+    set "TARGET_DIR=%CD%\project"
+)
+
+if "%TARGET_DIR%"=="" (
+    echo [ERROR] dust build could not locate a project root from:
+    echo         current dir: %CD%
+    echo         expected one of:
+    echo         - %CD%\CMakeLists.txt
+    echo         - %CD%\project\CMakeLists.txt
     exit /b 1
 )
+
+pushd "%TARGET_DIR%"
 
 set BOARD=
 for /d %%d in (boards\*) do (
@@ -29,4 +40,6 @@ if not "%BOARD%"=="" (
     west build -b %NAME% %2 %3 %4 %5 %6 %7 %8 %9
 )
 
-
+set "RC=%ERRORLEVEL%"
+popd
+exit /b %RC%
