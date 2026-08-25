@@ -85,6 +85,8 @@ struct LogRecord
 {
     const char* fmt;               // 格式串（静态字面量，禁止临时栈串）
     LogColor    color;             // 颜色（四色）
+    TxPriority  prio;              // 展开后的发送优先级
+    bool        is_stale;          // DBG 切换/关闭时标记作废
     uint32_t    args[kMaxLogArgs]; // 参数快照
     uint8_t     nargs;             // 参数槽数（0~kMaxLogArgs）
     uint8_t     next;              // 记录链表（数组索引，255=nullptr）
@@ -103,7 +105,7 @@ struct LogRecord
 class Log
 {
 public:
-    static bool Init();                                  					// 初始化：清 active_/计数/空闲帧链
+    static bool Init();                                  					// 初始化：清 active_/计数/队列池
     static void BindStream(Stream* s) { stream_ = s; }   					// 绑定发送通道（shell thread_init 调用）
     static LogEntry* FindOrCreate(const char* name);     					// 按名字查 DBG 条目，首见创建（返回 nullptr=池满）
     static bool Select(const char* name);                					// 选中：active_ 指向该条目（同一时间只保留一条）
@@ -130,8 +132,7 @@ public:
     static void SetShellOwn() { shell_own_ = true; }     					// shell 线程接管发送（Task 首行调用）
     static void Process(uint8_t* line);                  					// log 命令入口（list/on/off）
     static void CmdLogList();                            					// log list：遍历数组输出
-    static void FormatRecord(LogRecord* r);        							// 展开请求为字符串入帧池（shell 线程）
-	static LogRecord* DequeueRecord();                   					// 出队日志原始请求（shell 线程）
+    static bool ProcessOneRecord();                      					// 处理一条原始请求：出队、展开、归还
 	
 	static void OnTxDone()													// TX_DONE 回调（UartDma tx_cb，清标志并通知 shell 续发）
     {
@@ -153,48 +154,64 @@ public:
 	}  	
 	
 private:
-	static constexpr uint8_t kNullIndex = 255;								// 帧索引链表空值（255 = 无下一帧）
+	static constexpr uint8_t kNullIndex = 255;								// 索引链表空值（255 = 无下一项）
+
+    struct TxFrameQueue
+    {
+        TxFrame frames[kTxPoolCount];
+        uint8_t free_head;
+        uint8_t head;
+        uint8_t tail;
+
+        void 	 Reset();
+        bool 	 PushLocked(const char* data, int len, TxPriority prio, bool allow_evict);
+        TxFrame* PopLocked();
+        void 	 ReleaseLocked(TxFrame* f);
+        void 	 MarkStaleDbgLocked();
+
+    private:
+        TxFrame* AllocLocked();
+        TxFrame* EvictLowestLocked();
+        void 	 PushByPrioLocked(TxFrame* f);
+        uint8_t  IndexOf(const TxFrame* f) const;
+    };
+
+    struct LogRecordQueue
+    {
+        LogRecord records[kMaxLogRecords];
+        uint8_t free_head;
+        uint8_t head;
+        uint8_t tail;
+
+        void Reset();
+        bool PushLocked(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs);
+        LogRecord* PopLocked();
+        void ReleaseLocked(LogRecord* r);
+        void MarkStaleDbgLocked();
+
+    private:
+        uint8_t IndexOf(const LogRecord* r) const;
+    };
 
     static inline LogEntry  entries_[kMaxLogEntries] {}; 					// 64 条静态池（DBG，运行时注册）
     static inline LogEntry* active_     = nullptr;       					// 当前选中条目（log on 指向、log off 置空；同一时间只打一条）
     static inline uint8_t   count_      = 0;             					// 已注册条目数
     static inline Stream*   stream_     = nullptr;       					// 发送通道（BindStream 绑定）
-    static inline TxFrame   tx_pool_[kTxPoolCount] {};   					// 帧池 4×128B=512B
-    static inline uint8_t   free_head_  = 0;             					// 空闲帧索引链表头
-    static inline uint8_t   tx_head_    = kNullIndex;    					// 发送帧队列头（三档共用）
-    static inline uint8_t   tx_tail_    = kNullIndex;    					// 发送帧队列尾（三档共用）
+    static inline TxFrameQueue   txq_   {};             					// 发送帧池 + 三档优先级队列
+    static inline LogRecordQueue recq_  {};             					// 原始请求池 + FIFO 队列
     static inline bool      sending_    = false;         					// 当前是否有帧在 DMA 中
     static inline bool      shell_own_  = false;         					// shell 线程已接管发送（Task 首行置 true，boot 早期为 false 直发）
-    static inline LogRecord rec_pool_[kMaxLogRecords] {}; 					// 原始请求池（异步段参数快照队列）
-    static inline uint8_t   rec_head_   = kNullIndex;    					// 原始请求队列头（FIFO）
-    static inline uint8_t   rec_free_   = 0;             					// 原始请求空闲链头
 
-    static TxFrame* EvictLowest();                      														// 池满：挤最低优先级帧（DBG 先、命令次、事件永不挤）
-	static void     EnqueueByPrio(TxFrame* f);          														// 按三档优先级插队（同档先来后到）
-    static TxFrame* Dequeue();                          														// 取队头帧（作废帧跳过回收）
-    static void     MarkStaleDbg();                     														// 切换/关闭时：队列中 Dbg 档帧标记作废（及时顶替）
-	static bool     EnqueueFrame(const char* data, int len, TxPriority prio);  								// 锁内公共：截断+取帧+入队（调用者已 irq_lock）
-	static void     PublishDirect(const char* data, int len, TxPriority prio);  								// 直发原语：入帧池+入队+立即 SendFrame（命令响应/boot 日志）
-	static void     PublishQueued(const char* data, int len, TxPriority prio);  								// 异步原语：入帧池+入队+give（shell 线程 FormatRecord 后）
-    static void     PrintColor(LogColor c, const char* fmt, va_list ap);  										// 通用：上色 + 仲裁发送
-    static void     SnapshotArgs(const char* fmt, va_list ap, uint32_t* args, uint8_t* nargs); 					// 参数值快照（异步段调用点）
-    static void     TryEnqueueRecord(const char* fmt, LogColor color, const uint32_t* args, uint8_t nargs); 	// 入队原始请求（异步段调用点）
+    static TxFrame* Dequeue();                          																		// 取队头帧（作废帧跳过回收）
+    static void     MarkStaleDbg();                     																		// 切换/关闭时：队列中 Dbg 档帧/记录标记作废（及时顶替）
+	static bool     EnqueueFrame(const char* data, int len, TxPriority prio);  								    				// 锁内公共：截断+取帧+入队（调用者已 irq_lock）
+	static void     PublishDirect(const char* data, int len, TxPriority prio);  												// 直发原语：入帧池+入队+立即 SendFrame（命令响应/boot 日志）
+	static void     PublishQueued(const char* data, int len, TxPriority prio);  												// 异步原语：入帧池+入队+give（shell 线程 FormatRecord 后）
+    static void     PrintColor(LogColor c, const char* fmt, va_list ap);  														// 通用：上色 + 仲裁发送
+    static void     SnapshotArgs(const char* fmt, va_list ap, uint32_t* args, uint8_t* nargs); 									// 参数值快照（异步段调用点）
+    static void     FormatRecord(LogRecord* r);        																			// 展开请求为字符串入帧池（shell 线程）
+    static void     TryEnqueueRecord(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs); 	// 入队原始请求（异步段调用点）
 
-	static TxFrame* AllocFrame()											// 空闲池取帧（无则 nullptr）
-    {
-        if (free_head_ == kNullIndex) return nullptr;
-
-        uint8_t i = free_head_;
-        free_head_ = tx_pool_[i].next;
-        tx_pool_[i].next = kNullIndex;
-        return &tx_pool_[i];
-    }                       												
-	static void RecycleFrame(TxFrame* f)									// 帧归还空闲池
-    {
-        uint8_t i = static_cast<uint8_t>(f - tx_pool_);
-        f->next = free_head_;
-        free_head_ = i;
-    }           															
     static void SendFrame(TxFrame* f)
     {
         sending_ = true;
@@ -202,7 +219,7 @@ private:
         {
             sending_ = false;                	 							// 发送失败：不置发送中
         }
-        RecycleFrame(f);                      								// 归还空闲池：帧内容已移交 UartDma，立即复用
+        txq_.ReleaseLocked(f);                      						// 归还空闲池：帧内容已移交 UartDma，立即复用
     }              															// DMA 发送一帧
 };
 

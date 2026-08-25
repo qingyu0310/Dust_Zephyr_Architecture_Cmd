@@ -36,22 +36,8 @@ bool Log::Init()
     active_  = nullptr;
     count_   = 0;
     sending_ = false;
-    tx_head_ = kNullIndex;
-    tx_tail_ = kNullIndex;
-
-    free_head_ = 0;
-    for (uint8_t i = 0; i < kTxPoolCount; ++i)
-    {
-        tx_pool_[i].next = (i + 1 < kTxPoolCount) ? static_cast<uint8_t>(i + 1) : kNullIndex;
-    }
-
-    // 原始请求池空闲链重建（异步段参数快照队列）
-    rec_head_ = kNullIndex;
-    rec_free_ = 0;
-    for (uint8_t i = 0; i < kMaxLogRecords; ++i)
-    {
-        rec_pool_[i].next = (i + 1 < kMaxLogRecords) ? static_cast<uint8_t>(i + 1) : kNullIndex;
-    }
+    txq_.Reset();
+    recq_.Reset();
     return true;
 }
 
@@ -123,7 +109,7 @@ void Log::Dbgl(LogEntry* e, const char* fmt, ...)
     SnapshotArgs(fmt, ap, args, &nargs);
     va_end(ap);
 
-    TryEnqueueRecord(fmt, LogColor::White, args, nargs);
+    TryEnqueueRecord(fmt, LogColor::White, TxPriority::Dbg, args, nargs);
 
     unsigned key = irq_lock();
     if (!sending_ && stream_ != nullptr) k_sem_give(&stream_->sem_);
@@ -207,7 +193,7 @@ void Log::PrintColor(LogColor c, const char* fmt, va_list ap)
     uint8_t  nargs = 0;
     SnapshotArgs(fmt, ap, args, &nargs);      // 在 va_end 前快照
 
-    TryEnqueueRecord(fmt, c, args, nargs);    // 入原始请求队列
+    TryEnqueueRecord(fmt, c, TxPriority::Event, args, nargs);    // 入原始请求队列
 
     unsigned key = irq_lock();
     if (!sending_ && stream_ != nullptr) k_sem_give(&stream_->sem_);   		// 唤醒 shell 去 FormatRecord
@@ -302,62 +288,37 @@ void Log::SnapshotArgs(const char* fmt, va_list ap, uint32_t* args, uint8_t* nar
  *
  * @param fmt   格式串（静态字面量）
  * @param color 颜色
+ * @param prio  展开后的发送优先级
  * @param args  参数槽
  * @param nargs 槽数
  */
-void Log::TryEnqueueRecord(const char* fmt, LogColor color, const uint32_t* args, uint8_t nargs)
+void Log::TryEnqueueRecord(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs)
 {
     unsigned key = irq_lock();                // 并发保护（任务或 ISR 上下文）
-
-    if (rec_free_ == kNullIndex)              // 池满：直接丢
-    {
-        irq_unlock(key);
-        return;
-    }
-
-    uint8_t i = rec_free_;
-    rec_free_ = rec_pool_[i].next;
-
-    rec_pool_[i].fmt   = fmt;
-    rec_pool_[i].color = color;
-    rec_pool_[i].nargs = nargs;
-    for (uint8_t k = 0; k < nargs; ++k) rec_pool_[i].args[k] = args[k];
-    rec_pool_[i].next  = kNullIndex;
-
-    if (rec_head_ == kNullIndex)
-    {
-        rec_head_ = i;                        // 空队列：直接作头
-    }
-    else
-    {
-        uint8_t t = rec_head_;                // 尾插，FIFO 保序
-        while (rec_pool_[t].next != kNullIndex) t = rec_pool_[t].next;
-        rec_pool_[t].next = i;
-    }
-
+    (void)recq_.PushLocked(fmt, color, prio, args, nargs);
     irq_unlock(key);
 }
 
 /**
- * @brief 出队日志原始请求（shell 线程）
+ * @brief 处理一条日志原始请求（shell 线程）
  *
- * 归还空闲链进锁，防与 ISR Enqueue 竞争（rec_free_ 生产/消费都动）。
- * @return 记录指针；队列空返回 nullptr
+ * 记录在格式化完成后再归还空闲链，避免出队后立即被 ISR 复用。
+ * @return true 处理了一条记录；false 队列为空
  */
-LogRecord* Log::DequeueRecord()
+bool Log::ProcessOneRecord()
 {
-    if (rec_head_ == kNullIndex) return nullptr;
-
-    uint8_t i = rec_head_;
-    rec_head_ = rec_pool_[i].next;
-    rec_pool_[i].next = kNullIndex;
-
     unsigned key = irq_lock();
-    rec_pool_[i].next = rec_free_;
-    rec_free_ = i;
+    LogRecord* r = recq_.PopLocked();
     irq_unlock(key);
 
-    return &rec_pool_[i];
+    if (r == nullptr) return false;
+
+    FormatRecord(r);
+
+    key = irq_lock();
+    recq_.ReleaseLocked(r);
+    irq_unlock(key);
+    return true;
 }
 
 /**
@@ -452,82 +413,116 @@ void Log::FormatRecord(LogRecord* r)
     const uint32_t rgb = static_cast<uint32_t>(r->color);
     int n = snprintf(out, sizeof(out), "\x1b[38;2;%d;%d;%dm%s\x1b[0m\r\n", (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, buf);
 	
-    if (n > 0) PublishQueued(out, n, TxPriority::Event);   // 线程展开后异步入队，shell 泵（事件档）
+    if (n > 0) PublishQueued(out, n, r->prio);             // 线程展开后按原始请求档位入队
 }
 
 /**
- * @brief 按优先级入队：Event 插队头，Cmd 插事件后/DBG 前，Dbg 排队尾
- *
- * 同档帧保持先来后到（prio 相同的帧插在后面）。
- * @param f 待入队帧
+ * @brief 重置发送帧池和发送队列
  */
-void Log::EnqueueByPrio(TxFrame* f)
+void Log::TxFrameQueue::Reset()
+{
+    head = kNullIndex;
+    tail = kNullIndex;
+    free_head = 0;
+    for (uint8_t i = 0; i < kTxPoolCount; ++i)
+    {
+        frames[i].len = 0;
+        frames[i].is_stale = false;
+        frames[i].next = (i + 1 < kTxPoolCount) ? static_cast<uint8_t>(i + 1) : kNullIndex;
+    }
+}
+
+uint8_t Log::TxFrameQueue::IndexOf(const TxFrame* f) const
+{
+    return static_cast<uint8_t>(f - frames);
+}
+
+TxFrame* Log::TxFrameQueue::AllocLocked()
+{
+    if (free_head == kNullIndex) return nullptr;
+
+    uint8_t i = free_head;
+    free_head = frames[i].next;
+    frames[i].next = kNullIndex;
+    return &frames[i];
+}
+
+void Log::TxFrameQueue::ReleaseLocked(TxFrame* f)
+{
+    uint8_t i = IndexOf(f);
+    f->is_stale = false;
+    f->next = free_head;
+    free_head = i;
+}
+
+void Log::TxFrameQueue::PushByPrioLocked(TxFrame* f)
 {
     f->next = kNullIndex;
-    if (tx_head_ == kNullIndex) { tx_head_ = tx_tail_ = static_cast<uint8_t>(f - tx_pool_); return; }
+    if (head == kNullIndex) { head = tail = IndexOf(f); return; }
 
-    uint8_t* pp = &tx_head_;              			// 找插入点：第一个 prio > f->prio 的帧之前
-    while (*pp != kNullIndex && tx_pool_[*pp].prio <= f->prio)
-        pp = &tx_pool_[*pp].next;
+    uint8_t* pp = &head;              			// 找插入点：第一个 prio > f->prio 的帧之前
+    while (*pp != kNullIndex && frames[*pp].prio <= f->prio)
+        pp = &frames[*pp].next;
 
-    uint8_t idx = static_cast<uint8_t>(f - tx_pool_);
+    uint8_t idx = IndexOf(f);
     f->next = *pp;
     *pp = idx;
-    if (f->next == kNullIndex) tx_tail_ = idx;
+    if (f->next == kNullIndex) tail = idx;
 }
 
 /**
  * @brief 池满挤帧：从队尾往前找第一个非事件帧（优先挤 DBG，其次命令响应）
  * @return 被挤出的帧指针；队列全是事件帧（极端）返回 nullptr
  */
-TxFrame* Log::EvictLowest()
+TxFrame* Log::TxFrameQueue::EvictLowestLocked()
 {
-    if (tx_head_ == kNullIndex) return nullptr;
+    if (head == kNullIndex) return nullptr;
 
-    uint8_t prev = kNullIndex, cur = tx_head_, victim = kNullIndex, victim_prev = kNullIndex;
+    uint8_t prev = kNullIndex, cur = head, victim = kNullIndex, victim_prev = kNullIndex;
     while (cur != kNullIndex)
     {
-        if (tx_pool_[cur].prio != TxPriority::Event)   // 找最低优先（最大 prio 值）的帧
+        if (frames[cur].prio != TxPriority::Event)   // 找最低优先（最大 prio 值）的帧
         {
-            if (victim == kNullIndex || tx_pool_[cur].prio > tx_pool_[victim].prio)
+            if (victim == kNullIndex || frames[cur].prio > frames[victim].prio)
             { victim = cur; victim_prev = prev; }
         }
         prev = cur;
-        cur = tx_pool_[cur].next;
+        cur = frames[cur].next;
     }
     if (victim == kNullIndex) return nullptr;     // 全是事件帧（极端）→ 无可挤
 
     if (victim_prev == kNullIndex) {
-		tx_head_ = tx_pool_[victim].next;
+		head = frames[victim].next;
 	} else {
-		tx_pool_[victim_prev].next = tx_pool_[victim].next;
+		frames[victim_prev].next = frames[victim].next;
 	}                           
 	 	
-    if (tx_pool_[victim].next == kNullIndex) tx_tail_ = victim_prev;
+    if (frames[victim].next == kNullIndex) tail = victim_prev;
 
-    tx_pool_[victim].next = kNullIndex;
-    return &tx_pool_[victim];
+    frames[victim].next = kNullIndex;
+    frames[victim].is_stale = false;
+    return &frames[victim];
 }
 
 /**
  * @brief 队列弹头：is_stale 作废帧跳过并回收（DBG 切换及时顶替）
  * @return 待发送帧指针；队列空返回 nullptr
  */
-TxFrame* Log::Dequeue()
+TxFrame* Log::TxFrameQueue::PopLocked()
 {
-    while (tx_head_ != kNullIndex)
+    while (head != kNullIndex)
     {
-        uint8_t i = tx_head_;
-        tx_head_ = tx_pool_[i].next;
-        if (tx_head_ == kNullIndex) tx_tail_ = kNullIndex;
+        uint8_t i = head;
+        head = frames[i].next;
+        if (head == kNullIndex) tail = kNullIndex;
 
-        tx_pool_[i].next = kNullIndex;
-        if (tx_pool_[i].is_stale)
+        frames[i].next = kNullIndex;
+        if (frames[i].is_stale)
         {
-            RecycleFrame(&tx_pool_[i]);   // 作废帧：回收不发送
+            ReleaseLocked(&frames[i]);   // 作废帧：回收不发送
             continue;
         }
-        return &tx_pool_[i];
+        return &frames[i];
     }
     return nullptr;
 }
@@ -535,47 +530,145 @@ TxFrame* Log::Dequeue()
 /**
  * @brief 切换/关闭时：队列中所有 Dbg 档帧标记作废（Event/Cmd 不动，及时顶替）
  */
-void Log::MarkStaleDbg()
+void Log::TxFrameQueue::MarkStaleDbgLocked()
 {
-    unsigned key = irq_lock();            // 并发保护（任务上下文）
-    uint8_t cur = tx_head_;
+    uint8_t cur = head;
     while (cur != kNullIndex)
     {
-        if (tx_pool_[cur].prio == TxPriority::Dbg) tx_pool_[cur].is_stale = true;
-        cur = tx_pool_[cur].next;
+        if (frames[cur].prio == TxPriority::Dbg) frames[cur].is_stale = true;
+        cur = frames[cur].next;
     }
-    irq_unlock(key);
 }
 
 /**
- * @brief 入队仲裁：三档优先级（事件 > 命令响应 > DBG）
+ * @brief 锁内入队仲裁：三档优先级（事件 > 命令响应 > DBG）
  *
  * 超长截断到 kTxMaxLen；池满挤最低优先级帧（DBG 先、命令次、事件永不挤）；
- * DMA 空闲时立即启动发送链。并发保护：本函数在 irq_lock 内完成全部队列操作。
+ * 并发保护：调用者已持有 irq_lock。
  *
  * @param data 发送内容（已格式化，可能含 ANSI 颜色）
  * @param len  数据长度
  * @param prio 优先级档位
  */
-bool Log::EnqueueFrame(const char* data, int len, TxPriority prio)
+bool Log::TxFrameQueue::PushLocked(const char* data, int len, TxPriority prio, bool allow_evict)
 {
     if (len > kTxMaxLen) len = kTxMaxLen; // 超长截断
 
-    TxFrame* f = AllocFrame();            // 从空闲池取帧
+    TxFrame* f = AllocLocked();            // 从空闲池取帧
     if (f == nullptr)
     {
-        if (k_is_in_isr()) return false;  // ISR：池满直接丢，不 Evict 遍历链表
-        f = EvictLowest();                // 线程上下文池满：挤最低优先级帧（DBG 先、命令次、事件永不挤）
+        if (!allow_evict) return false;  // ISR：池满直接丢，不 Evict 遍历链表
+        f = EvictLowestLocked();         // 线程上下文池满：挤最低优先级帧（DBG 先、命令次、事件永不挤）
         if (f == nullptr) return false;   // 池满且全是事件帧（极端）→ 丢弃
     }
 
-    memcpy(f->data, data, static_cast<size_t>(len));
+    std::memcpy(f->data, data, static_cast<size_t>(len));
     f->len = static_cast<uint16_t>(len);
     f->prio = prio;
     f->is_stale = false;
 
-    EnqueueByPrio(f);                     // 按档位插队
+    PushByPrioLocked(f);                  // 按档位插队
     return true;
+}
+
+void Log::LogRecordQueue::Reset()
+{
+    head = kNullIndex;
+    tail = kNullIndex;
+    free_head = 0;
+    for (uint8_t i = 0; i < kMaxLogRecords; ++i)
+    {
+        records[i].is_stale = false;
+        records[i].next = (i + 1 < kMaxLogRecords) ? static_cast<uint8_t>(i + 1) : kNullIndex;
+    }
+}
+
+uint8_t Log::LogRecordQueue::IndexOf(const LogRecord* r) const
+{
+    return static_cast<uint8_t>(r - records);
+}
+
+bool Log::LogRecordQueue::PushLocked(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs)
+{
+    if (free_head == kNullIndex) return false;
+    if (nargs > kMaxLogArgs) nargs = kMaxLogArgs;
+
+    uint8_t i = free_head;
+    free_head = records[i].next;
+
+    records[i].fmt = fmt;
+    records[i].color = color;
+    records[i].prio = prio;
+    records[i].is_stale = false;
+    records[i].nargs = nargs;
+    for (uint8_t k = 0; k < nargs; ++k) records[i].args[k] = args[k];
+    records[i].next = kNullIndex;
+
+    if (head == kNullIndex)
+    {
+        head = tail = i;
+    }
+    else
+    {
+        records[tail].next = i;
+        tail = i;
+    }
+    return true;
+}
+
+LogRecord* Log::LogRecordQueue::PopLocked()
+{
+    while (head != kNullIndex)
+    {
+        uint8_t i = head;
+        head = records[i].next;
+        if (head == kNullIndex) tail = kNullIndex;
+
+        records[i].next = kNullIndex;
+        if (records[i].is_stale)
+        {
+            ReleaseLocked(&records[i]);
+            continue;
+        }
+        return &records[i];
+    }
+    return nullptr;
+}
+
+void Log::LogRecordQueue::ReleaseLocked(LogRecord* r)
+{
+    uint8_t i = IndexOf(r);
+    r->is_stale = false;
+    r->next = free_head;
+    free_head = i;
+}
+
+void Log::LogRecordQueue::MarkStaleDbgLocked()
+{
+    uint8_t cur = head;
+    while (cur != kNullIndex)
+    {
+        if (records[cur].prio == TxPriority::Dbg) records[cur].is_stale = true;
+        cur = records[cur].next;
+    }
+}
+
+TxFrame* Log::Dequeue()
+{
+    return txq_.PopLocked();
+}
+
+void Log::MarkStaleDbg()
+{
+    unsigned key = irq_lock();            // 并发保护（任务上下文）
+    txq_.MarkStaleDbgLocked();
+    recq_.MarkStaleDbgLocked();
+    irq_unlock(key);
+}
+
+bool Log::EnqueueFrame(const char* data, int len, TxPriority prio)
+{
+    return txq_.PushLocked(data, len, prio, !k_is_in_isr());
 }
 
 /**

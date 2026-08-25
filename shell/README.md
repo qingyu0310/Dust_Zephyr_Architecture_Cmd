@@ -114,11 +114,11 @@ enum class TxPriority : uint8_t
 |------|-----|------|
 | `kTxFrameSize` | 128 | 帧数据区大小（含尾部 `\0` 保险） |
 | `kTxMaxLen` | 127 | 发送最长字节长度，超长截断 |
-| `kTxPoolCount` | 4 | 帧池帧数（4 × 128B = 512B） |
+| `kTxPoolCount` | 8 | 帧池帧数（8 × 128B = 1KB） |
 | `kMaxLogEntries` | 64 | DBG 条目数上限 |
 | `kMaxLogArgs` | 4 | 参数快照槽上限（`%f` 占 2 槽） |
-| `kMaxLogRecords` | 8 | LogRecord 原始请求队列深度（8 × 26B = 208B） |
-| `kNullIndex` | 255 | 链表空值（数组索引，255 = 无下一帧） |
+| `kMaxLogRecords` | 8 | LogRecord 原始请求队列深度（约 8 × 28B = 224B，32 位目标） |
+| `kNullIndex` | 255 | 链表空值（数组索引，255 = 无下一项） |
 
 **每帧字节开销**（TrueColor 宏层拼接，[log.hpp](log.hpp) 注释）：
 
@@ -148,6 +148,8 @@ struct LogRecord      // 日志原始请求（未格式化，异步段生产队�
 {
     const char* fmt;               // 格式串（静态字面量，禁止临时栈串）
     LogColor    color;             // 颜色（四色）
+    TxPriority  prio;              // 展开后的发送优先级
+    bool        is_stale;          // DBG 切换/关闭时标记作废
     uint32_t    args[kMaxLogArgs]; // 参数快照（%f 占 2 槽，%s/%p 指针 1 槽，整型 1 槽）
     uint8_t     nargs;             // 参数槽数（0~kMaxLogArgs）
     uint8_t     next;              // 记录链表（数组索引，255=nullptr）
@@ -156,15 +158,13 @@ struct LogRecord      // 日志原始请求（未格式化，异步段生产队�
 
 ### 3.3 链表机制：三类链，零动态分配
 
-整个日志系统的队列全部是**静态数组 + 数组索引链表**（`uint8_t next` 存数组下标，`255`=空），运行期不 new/malloc。
+整个日志系统的队列全部是**静态数组 + 数组索引链表**（`uint8_t next` 存数组下标，`255`=空），运行期不 new/malloc。裸链表字段已经封装到两个私有队列结构里：
 
-**① 帧空闲链**（`free_head_`）：可用的空 TxFrame 组成的链。`AllocFrame()` 从头摘、`RecycleFrame()` 归还头插。
+**① `TxFrameQueue txq_`**：内部维护 `frames/free_head/head/tail`，负责发送帧池、三档优先级插队、池满挤最低优先级帧、跳过作废 DBG 帧。
 
-**② 帧发送队列**（`tx_head_ / tx_tail_`）：已格式化待发送的 TxFrame，**按三档优先级有序**（见 §3.5 EnqueueByPrio）。发送时从 `tx_head_` 弹。
+**② `LogRecordQueue recq_`**：内部维护 `records/free_head/head/tail`，负责异步段未格式化请求的 FIFO、池满丢弃、DBG 作废标记，以及格式化完成后的回收。
 
-**③ LogRecord 原始请求队列**（`rec_head_ / rec_free_`）：异步段调用点入队的未格式化日志请求，**严格 FIFO**（尾插，先来先格式化）。
-
-帧在①↔②之间流转（分配→入队→发送→回收），LogRecord 在③内流转（快照入队→线程出队→格式化入帧池→回空闲）。静态池 + 索引链表 = 时间确定、无碎片。
+帧在 `txq_` 内流转（分配→入队→发送→回收），LogRecord 在 `recq_` 内流转（快照入队→shell 出队→格式化入帧池→回空闲）。静态池 + 索引链表 = 时间确定、无碎片；封装后 `Log` 只表达业务动作。
 
 ### 3.4 打印入口（分时段）
 
@@ -185,7 +185,7 @@ void Log::PrintColor(LogColor c, const char* fmt, va_list ap)
         vsnprintf(buf, sizeof(buf), fmt, ap);
         char out[kLogBufSize + kColorOutExtra];
         int n = snprintf(out, sizeof(out), "\x1b[38;2;R;G;Bm%s\x1b[0m\r\n", ..., buf);
-        if (n > 0) TrySend(out, n, TxPriority::Event);
+        if (n > 0) PublishDirect(out, n, TxPriority::Event);
         return;
     }
 
@@ -193,7 +193,7 @@ void Log::PrintColor(LogColor c, const char* fmt, va_list ap)
     uint32_t args[kMaxLogArgs];
     uint8_t  nargs = 0;
     SnapshotArgs(fmt, ap, args, &nargs);
-    TryEnqueueRecord(fmt, c, args, nargs);
+    TryEnqueueRecord(fmt, c, TxPriority::Event, args, nargs);
     unsigned key = irq_lock();
     if (!sending_ && stream_ != nullptr) k_sem_give(&stream_->sem_);
     irq_unlock(key);
@@ -215,98 +215,51 @@ void Log::PrintColor(LogColor c, const char* fmt, va_list ap)
 
 ### 3.6 发送仲裁（核心）
 
-#### TrySend：入队仲裁（分时段）
+#### TxFrameQueue：帧池 + 三档优先级队列
+
+`Log::EnqueueFrame()` 是锁内薄封装，真正的帧池分配、池满挤出、优先级插队都在 `TxFrameQueue` 内部完成：
 
 ```cpp
-void Log::TrySend(const char* data, int len, TxPriority prio)
+bool Log::EnqueueFrame(const char* data, int len, TxPriority prio)
 {
-    if (len > kTxMaxLen) len = kTxMaxLen;   // 超长截断
-
-    unsigned key = irq_lock();              // 并发保护
-
-    TxFrame* f = AllocFrame();              // 从空闲池取帧
-    if (f == nullptr)
-    {
-        if (k_is_in_isr()) { irq_unlock(key); return; }   // ISR：池满直接丢，不 Evict 遍历
-        f = EvictLowest();                  // 线程上下文池满：挤最低优先级帧
-        if (f == nullptr) { irq_unlock(key); return; }    // 全是事件帧（极端）→ 丢弃
-    }
-
-    memcpy(f->data, data, len);
-    f->len = len; f->prio = prio; f->is_stale = false;
-    EnqueueByPrio(f);                       // 按档插队
-
-    if (!shell_own_)                        // 同步段：调用点直发（shell 未接管）
-    {
-        if (!sending_)
-        {
-            TxFrame* next = Dequeue();
-            if (next != nullptr) SendFrame(next);
-        }
-    }
-    else if (!sending_ && stream_ != nullptr)   // 异步段：give 让 shell 泵
-        k_sem_give(&stream_->sem_);
-
-    irq_unlock(key);
+    return txq_.PushLocked(data, len, prio, !k_is_in_isr());
 }
 ```
 
-步骤：截断 → 加锁 → 取帧 → 池满处理（ISR 直接丢 / 线程 Evict）→ 拷内容 → **按档插队** → 分时段触发发送 → 解锁。
-
-#### EnqueueByPrio：链表按档插队
-
-```cpp
-void Log::EnqueueByPrio(TxFrame* f)
-{
-    f->next = kNullIndex;
-    if (tx_head_ == kNullIndex) { tx_head_ = tx_tail_ = IndexOf(f); return; }
-
-    uint8_t* pp = &tx_head_;                  // 找插入点：第一个 prio > f->prio 的帧之前
-    while (*pp != kNullIndex && tx_pool_[*pp].prio <= f->prio)
-        pp = &tx_pool_[*pp].next;
-
-    uint8_t idx = IndexOf(f);
-    f->next = *pp;
-    *pp = idx;
-    if (f->next == kNullIndex) tx_tail_ = idx;
-}
-```
+`PushLocked()` 的步骤：截断 → 从 `free_head` 取帧 → 池满处理（ISR 直接丢 / 线程可挤最低优先级）→ 拷内容 → `PushByPrioLocked()` 按档插队。
 
 规则：
 - **Event(0) 插队头**——最高，永远最先发。
 - **Cmd(1) 插事件后、DBG 前**。
 - **Dbg(2) 排队尾**——最低。
-- **同档先来后到**：`while (prio <= f->prio)` 跳过同档，插到第一个严格更高 prio（即 prio 值更大 = 更低优先级）之前，同档保持原有相对顺序。
+- **同档先来后到**：`while (frames[*pp].prio <= f->prio)` 跳过同档，插到第一个更低优先级帧之前。
 
-这是单链表"跳着找插入点、指针重链"的经典写法——`pp` 是指向"前一个帧的 next 字段"的指针（`uint8_t*`），插队不改动其他帧。
-
-#### EvictLowest：池满挤帧
+#### EvictLowestLocked：池满挤帧
 
 ```cpp
-TxFrame* Log::EvictLowest()
+TxFrame* Log::TxFrameQueue::EvictLowestLocked()
 {
     // 遍历队列找 prio 值最大（最低优先）的非 Event 帧，从链表摘除返回
     // 优先挤 DBG，其次 Cmd；全是事件帧 → 返回 nullptr（无可挤）
-    ...
 }
 ```
 
 - **事件永不挤**（Event 帧在队列里不会被 Evict 掉）。
-- 优先挤 DBG，其次 Cmd。被挤掉的帧回空闲池，内容丢弃。
+- 优先挤 DBG，其次 Cmd。被挤掉的帧直接复用为新帧。
 
 #### 发送链（SendFrame / OnTxDone / PumpSend）
 
 ```
 SendFrame(f)
   sending_ = true
-  stream_->Send(f->data, f->len)   ← Stream 子类（UartDma::Send：memcpy 到自身缓冲 + DMA 提交）
-  RecycleFrame(f)                  ← 无论成败立即归还空闲池！
+  stream_->Send(f->data, f->len)      ← Stream 子类拷贝到自身 TX 缓冲后提交 DMA/USB
+  txq_.ReleaseLocked(f)               ← 无论成败立即归还发送帧池
 
 OnTxDone()——TX_DONE 中断回调（ISR 上下文）
   irq_lock()
   sending_ = false
   irq_unlock()
-  if (stream_ != nullptr) k_sem_give(&stream_->sem_)   ← 通知 shell 线程续发（不再 ISR 续发）
+  if (stream_ != nullptr) k_sem_give(&stream_->sem_)   ← 通知 shell 线程续发
 
 PumpSend()——shell 线程驱动（DMA 空闲则续发下一帧）
   unsigned key = irq_lock();
@@ -314,21 +267,20 @@ PumpSend()——shell 线程驱动（DMA 空闲则续发下一帧）
   irq_unlock(key);
 ```
 
-**关键点：帧即取即还**——`Stream::Send`（如 `UartDma::Send`）内部把帧内容拷进它自己的 `tx_data_`，DMA 搬运的是 Stream 子类的缓冲而非 `TxFrame::data`。Send 提交成功即帧使命结束，立即回空闲池，**帧池永不枯竭**。
+**关键点：帧即取即还**——当前 Stream 子类（如 `UartDma::Send`）内部把帧内容拷进自己的发送缓冲，DMA 搬运的是 Stream 子类缓冲而非 `TxFrame::data`。Send 提交成功即帧使命结束，立即回空闲池，**帧池稳态不被 DMA 占住**。
 
-**阶段2 起发送驱动在 shell 线程**：异步段调用点只入队 + give；`OnTxDone` ISR 只清标志 + give（不再续发）；shell `Task()` 唤醒后 `PumpSend()` 提交下一帧 DMA。ISR 里不再做 DMA 提交/续发链。
+**发送驱动在 shell 线程**：异步段调用点只入队 + give；`OnTxDone` ISR 只清标志 + give；shell `Task()` 唤醒后 `PumpSend()` 提交下一帧。ISR 里不续发链。
 
 #### Dequeue：队列弹头
 
 ```cpp
 TxFrame* Log::Dequeue()
 {
-    // 弹 tx_head_；is_stale 作废帧跳过并回收（DBG 切换及时顶替）
-    ...
+    return txq_.PopLocked();
 }
 ```
 
-`is_stale` 帧（`log on B` 时残留的 A 帧 / `log off` 残留）被跳过回收，不发送——**DBG 切换及时顶替**。
+`PopLocked()` 会跳过并回收 `is_stale` DBG 帧（`log on B` 时残留的 A 帧 / `log off` 残留），不发送——**DBG 切换及时顶替**。
 
 ### 3.7 参数快照（异步段，阶段3）
 
@@ -362,23 +314,38 @@ void Log::SnapshotArgs(const char* fmt, va_list ap, uint32_t* args, uint8_t* nar
 - **`%f` 占 2 槽**：double 64 位拆成低/高 32 位存两槽，展开时拼回。
 - 支持转换符：`%d %i %u %x %X %c %f %F %lf %s %p`。`%%` 无参数。禁用 `%lld/%e/%g/%n`。
 
-#### TryEnqueueRecord：入队（FIFO 尾插）
+#### TryEnqueueRecord：入队（LogRecordQueue FIFO 尾插）
 
 ```cpp
-void Log::TryEnqueueRecord(const char* fmt, LogColor color, const uint32_t* args, uint8_t nargs)
+void Log::TryEnqueueRecord(const char* fmt, LogColor color, TxPriority prio,
+                           const uint32_t* args, uint8_t nargs)
 {
-    unsigned key = irq_lock();            // 短临界区
-    if (rec_free_ == kNullIndex) { irq_unlock(key); return; }   // 池满直接丢（O(1)）
-    // 取 rec_free_ 头 → 写 fmt/color/nargs/args → 尾插（FIFO 保序）
-    ...
+    unsigned key = irq_lock();
+    (void)recq_.PushLocked(fmt, color, prio, args, nargs);
     irq_unlock(key);
 }
 ```
 
-#### DequeueRecord / FormatRecord：消费端展开（shell 线程）
+`LogRecordQueue::PushLocked()` 池满直接丢（O(1)），记录 `fmt/color/prio/nargs/args`，并用 `tail` 尾插保持 FIFO。DBG 记录保存为 `TxPriority::Dbg`，普通四色日志保存为 `TxPriority::Event`。
+
+#### ProcessOneRecord / FormatRecord：消费端展开（shell 线程）
 
 ```cpp
-LogRecord* Log::DequeueRecord();   // 弹 rec_head_，归还空闲链进锁（防与 ISR Enqueue 竞争）
+bool Log::ProcessOneRecord()
+{
+    unsigned key = irq_lock();
+    LogRecord* r = recq_.PopLocked();
+    irq_unlock(key);
+
+    if (r == nullptr) return false;
+
+    FormatRecord(r);               // 锁外格式化
+
+    key = irq_lock();
+    recq_.ReleaseLocked(r);         // 格式化后才归还，避免被 ISR 提前复用
+    irq_unlock(key);
+    return true;
+}
 
 void Log::FormatRecord(LogRecord* r)
 {
@@ -387,27 +354,28 @@ void Log::FormatRecord(LogRecord* r)
     //   %f        → memcpy 2 槽拼回 double → snprintf(seg, double)
     //   %s        → 指针还原，null 转 "(null)"
     //   %p        → 指针还原
-    // ANSI 上色 + \r\n → TrySend(..., TxPriority::Event)
+    // ANSI 上色 + \r\n → PublishQueued(..., r->prio)
 }
 ```
 
 - 展开在 shell 线程，用 picolibc snprintf 逐段展开（%f 精度由 libc 保证），不依赖 libc va_list。
+- `FormatRecord()` 是 `Log` 私有实现细节；shell 线程不再拿裸 `LogRecord*`。
 - **`%s` 约束**：快照存指针，延迟格式化要求指针仍有效——**只许字符串字面量**（静态存储期）。临时栈 `char buf[]` 传入会读野指针（最高风险，文档约束 + review 把关）。
 
 ### 3.8 并发保护
 
-三类链的共享状态被**任务上下文**（TrySend/SendLine/PrintColor/Dbgl/EnqueueRecord）与 **ISR 上下文**（OnTxDone/ISR 中 EnqueueRecord）同时访问：
+两个队列的共享状态被**任务上下文**（`PublishDirect/PublishQueued/SendLine/PrintColor/Dbgl/TryEnqueueRecord`）与 **ISR 上下文**（`OnTxDone/ISR 中 TryEnqueueRecord`）同时访问：
 
 | 入口 | 锁 | 说明 |
 |------|----|------|
-| `TrySend` | `irq_lock` | 帧池分配/入队/发送触发全在锁内 |
+| `PublishDirect/PublishQueued` | `irq_lock` | `EnqueueFrame` 和发送触发在锁内 |
 | `OnTxDone` | `irq_lock` | 清 sending_，give 在锁外 |
 | `PumpSend` | `irq_lock` | Dequeue+SendFrame 锁内 |
 | `TryEnqueueRecord` | `irq_lock` | LogRecord 入队锁内 |
-| `DequeueRecord` | `irq_lock`（归还需） | 归还 rec_free_ 进锁，防与 ISR Enqueue 竞争 |
-| `MarkStaleDbg` | `irq_lock` | DBG 切换标记作废 |
+| `ProcessOneRecord` | `irq_lock`（出队/归还） | 格式化在锁外；记录格式化后才归还 |
+| `MarkStaleDbg` | `irq_lock` | DBG 帧和 DBG 原始记录一起标记作废 |
 
-加锁点集中在**入口**，内部 helper（AllocFrame/RecycleFrame/EnqueueByPrio/EvictLowest/Dequeue/SendFrame）只在锁内被调用。
+加锁点集中在**入口**，内部 helper（`TxFrameQueue::*Locked` / `LogRecordQueue::*Locked` / `SendFrame`）只在锁内被调用，`FormatRecord()` 不持锁。
 
 ### 3.9 初始化生命周期
 
@@ -523,9 +491,8 @@ void Shell::Task()
 
         Log::PumpSend();                          // 先驱动日志发送（DMA 空闲则续发）
 
-        while (auto* r = Log::DequeueRecord())    // 出队参数快照请求 → 展开入帧池 → 泵
+        while (Log::ProcessOneRecord())           // 出队参数快照请求 → 展开入帧池 → 泵
         {
-            Log::FormatRecord(r);
             Log::PumpSend();
         }
 
@@ -546,7 +513,7 @@ void Shell::Task()
 
 **线程是日志发送的驱动 + 接收处理**：
 1. `sem_` 从"接收通知信号量"升级为**"通道事件信号量"**（接收数据 OR 日志发送需要驱动，[stream.hpp](E:/Zephyr/zephyr_user/framework/drivers/communication/stream/stream.hpp) 注释同步）。
-2. 唤醒后**先 `PumpSend()`** 泵日志帧，再 **`DequeueRecord → FormatRecord`** 展开异步段参数快照，最后才 `Read` 接收数据。
+2. 唤醒后**先 `PumpSend()`** 泵日志帧，再通过 **`ProcessOneRecord()`** 展开异步段参数快照，最后才 `Read` 接收数据。
 3. `sem_` 是 limit=1 计数信号量，接收/发送一起 give 会合并成一次唤醒——但安全：一次唤醒顺序执行全部处理，**数据不依赖 sem_ 计数**（接收数据在 Stream 缓冲、日志帧在队列，sem_ 只是"醒来处理"通知）。
 4. **前提**：shell 线程是 `stream_` 的**唯一消费者**（remote/gimbal 各自持有自己的 Stream 实例，不共享）。
 
@@ -587,7 +554,7 @@ REGISTER_THREAD(thread_start, PreThread, "dbg_start")                    ← Pre
 
 ## 7. 容量模型与实测数据（2026-08-06，921600 波特）
 
-**工程公式**（帧池 4 帧）：
+**工程公式**（帧池 8 帧）：
 
 ```
 B_max = K + 1               同一时间允许的最大日志调用数（1 DMA 中 + K 排队）
@@ -599,20 +566,20 @@ K_min = max(1, B - 1)       给定突发需求 B 所需最少帧数
 |----|--------|
 | 单帧周期（30/64/127B） | 371 / 743 / 1430us（理论 330/694/1378），回归 T = 38.2 + 10.96×len |
 | 固定开销/帧 | ~40us（任务侧 Send/take 调度 + ISR + TEMT 余量） |
-| 瞬时容量（4 帧池） | 最多 5 条同时发送，第 6 条起丢（事件永不挤） |
+| 瞬时容量（8 帧池） | 最多 9 条同时发送，第 10 条起丢（事件永不挤） |
 | 无限闭环 | 稳态 <92160 B/s（921600 波特 / 10bit）时零丢帧；满速（>92KB/s）丢帧 60% = 容量边界，扩帧不可救只能限速 |
 | 调用点耗时（相同字符，2026-08-10 实测） | 同步段直发 96us → 异步段线程参数快照 9us（省 ~87us，~10x） |
 
 **异步段新增容量**：调用点只做参数快照入队（LogRecord 8 条 FIFO），不占帧池——帧池容量留给格式化后待发的帧。LogRecord 池满直接丢（O(1)），不挤帧。
 
-**工程建议**：日志内容 <98B（127B 上限含 ~29B ANSI 开销）；瞬时突发 ≤5 条；持续输出限速 <92KB/s。
+**工程建议**：日志内容 <98B（127B 上限含 ~29B ANSI 开销）；瞬时突发 ≤9 条；持续输出限速 <92KB/s。
 
 ---
 
 ## 8. FAQ
 
 **Q：DUST_LOG 打印依赖线程吗？**
-A：**分时段**。boot 早期（`shell_own_=false`）调用点直发，不依赖线程；shell 线程启动（`PreThread`）接管后走异步，依赖 shell 线程 `PumpSend` 驱动 DMA + `FormatRecord` 展开快照。唯一前置是 `Log::Init()/BindStream()` 已执行（`dbg_init`，PreInit 阶段）。
+A：**分时段**。boot 早期（`shell_own_=false`）调用点直发，不依赖线程；shell 线程启动（`PreThread`）接管后走异步，依赖 shell 线程 `PumpSend` 驱动 DMA + `ProcessOneRecord()` 展开快照。唯一前置是 `Log::Init()/BindStream()` 已执行（`dbg_init`，PreInit 阶段）。
 
 **Q：异步段调用点（ISR）会做什么？**
 A：`SnapshotArgs`（扫 fmt + va_arg，~µs 级）+ `TryEnqueueRecord`（短临界区入队）+ give。**无 vsnprintf、无 DMA 提交、无链表遍历挤帧**。
@@ -620,8 +587,8 @@ A：`SnapshotArgs`（扫 fmt + va_arg，~µs 级）+ `TryEnqueueRecord`（短临
 **Q：为什么线程里不用 vsnprintf，要 FormatRecord 逐段拼？**
 A：vsnprintf 需要 `va_list`，而 `va_list` 是栈指针、调用点函数返回即失效，传不到线程。快照存的是**参数值**，FormatRecord 只能按槽位约定用 snprintf 逐段展开。
 
-**Q：帧池为什么是 4 帧？会不会不够？**
-A：4×128B=512B。帧即取即还（Send 提交即回收），稳态限速下永不枯竭；瞬时突发上限 = 帧数+1 = 5 条，第 6 条起丢（事件永不挤，DBG 先被挤）。
+**Q：帧池为什么是 8 帧？会不会不够？**
+A：8×128B=1KB。帧即取即还（Send 提交即回收），稳态限速下不被 DMA 长时间占住；瞬时突发上限 = 帧数+1 = 9 条，第 10 条起丢（事件永不挤，DBG 先被挤）。
 
 **Q：参数快照的 `%s` 有坑吗？**
 A：有。快照存指针，延迟格式化要求指针仍有效——**只许字符串字面量**。临时栈 `char buf[]` 传入会读野指针（最高风险）。项目盘点 + review 把关。
@@ -639,7 +606,7 @@ A：整数类型不做范围检查（写入 300&0xFF=44），只保证解析正�
 A：命令响应走 Cmd 档（事件后、DBG 前），DBG 流式打印期间命令响应**先于**后续 DBG 帧显示；事件（INF/ERR/OK/WRN）永不丢。
 
 **Q：`sem_` 是 limit=1，接收和发送一起 give 会不会丢事件？**
-A：不会。合并成一次唤醒但顺序执行 `PumpSend`+`FormatRecord`+`Read`，发送与接收都被处理；数据在队列/缓冲里不依赖 sem_ 计数，最多延迟到下次处理。
+A：不会。合并成一次唤醒但顺序执行 `PumpSend`+`ProcessOneRecord`+`Read`，发送与接收都被处理；数据在队列/缓冲里不依赖 sem_ 计数，最多延迟到下次处理。
 
 **Q：CONFIG_DUST_CMD_SHELL_LOG 关闭时调用 DUST_LOG_* 会怎样？**
 A：宏为空（log.hpp `#else` 空宏），调用点零开销、编译不报错——与 Zephyr LOG=n 静默语义一致。

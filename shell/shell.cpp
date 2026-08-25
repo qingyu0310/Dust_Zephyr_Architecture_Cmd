@@ -90,9 +90,8 @@ void Shell::Task()
 
         Log::PumpSend();                          								// 先驱动日志发送（DMA 空闲则续发）
 
-        while (auto* r = Log::DequeueRecord())    					// 出队参数快照请求 → 展开入帧池 → 泵
+        while (Log::ProcessOneRecord())    					// 出队参数快照请求 → 展开入帧池 → 泵
         {
-            Log::FormatRecord(r);
             Log::PumpSend();
         }
 
