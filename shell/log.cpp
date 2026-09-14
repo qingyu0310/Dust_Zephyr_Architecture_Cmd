@@ -78,11 +78,11 @@ bool Log::Select(const char* name)
         if (std::strcmp(entries_[i].name, name) == 0)
         {
             active_ = &entries_[i];
-            MarkStaleDbg();       // 及时顶替：队列中残留的旧 Dbg 档帧作废（Dequeue 跳过回收）
+            MarkStaleDbg();       			// 及时顶替：队列中残留的旧 Dbg 档帧作废（Dequeue 跳过回收）
             return true;
         }
     }
-    return false;                 // 不存在：log on 回 not found
+    return false;                 			// 不存在：log on 回 not found
 }
 
 /**

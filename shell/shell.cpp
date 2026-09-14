@@ -88,16 +88,16 @@ void Shell::Task()
     {
         k_sem_take(&stream_->sem_, K_FOREVER);   		 			// 通道事件：接收数据 OR 日志发送需要驱动
 
-        Log::PumpSend();                          								// 先驱动日志发送（DMA 空闲则续发）
+        Log::PumpSend();                          								 // 先驱动日志发送（DMA 空闲则续发）
 
-        while (Log::ProcessOneRecord())    					// 出队参数快照请求 → 展开入帧池 → 泵
+        while (Log::ProcessOneRecord())    										 // 出队参数快照请求 → 展开入帧池 → 泵
         {
             Log::PumpSend();
         }
 
         uint8_t buf[32];
         uint16_t n = stream_->Read(buf, sizeof(buf));
-        if (n == 0) continue;                     								// 发送唤醒，无接收数据
+        if (n == 0) continue;                     								 // 发送唤醒，无接收数据
 
         for (uint16_t i = 0; i < n; i++)
         {
