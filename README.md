@@ -177,9 +177,21 @@ REGISTER_INIT 不放入头文件宏，直接写在 buzzer.cpp 里。buzzer.cpp �
 
 所有段均放入 `ROMABLE_REGION`，运行时通过 `__xxx_start/end` 符号边界遍历，不需要运行时注册表。
 
-## build/ — 编译脚本
+## build/ — 编译与烧录脚本
 
-独立于 Zephyr `west build` 的封装，提供板级自动检索。
+独立于 Zephyr `west build` / `west flash` 的封装，提供板级自动检索与工作区自动定位。
+
+### 工作区定位（build 与 flash 共用）
+
+两个脚本都用同一套规则解析"目标项目根"，所以既可以在工作区根执行，也可以在项目根执行：
+
+| 当前目录 | 解析结果 |
+|---|---|
+| `<cwd>\CMakeLists.txt` 存在（项目根，如 `...\qingyu\project`） | `<cwd>` |
+| 否则 `<cwd>\project\CMakeLists.txt` 存在（工作区根，如 `zephyr_user`、`...\qingyu`） | `<cwd>\project` |
+| 都不满足 | 报错退出，不误跳到别的工作区 |
+
+解析到哪，`build\` 产物就落在哪、flash 就从哪读。
 
 ### build.bat
 
@@ -201,6 +213,36 @@ build hpm6e00evk -- -DCONFIG_TEST=y
 ### build.ps1
 
 PowerShell 版，`-Name` 指定板级配置，`-Opts` 传额外参数。
+
+### flash.bat
+
+```
+flash [west-flash-args...]
+```
+
+- **无板卡参数**：`west flash` 从 build 目录的 CMakeCache 读 BOARD 与 runner，不需要 `-b`
+- **原样透传**：定位到项目根后执行 `west flash %*`，参数不增不减不改（`--runner` / `-d` / `--erase` 等全部生效）
+- **`-d` 相对解析后的项目根**，与"手动 `cd` 进项目根再 `west flash -d xxx`"完全一致
+
+示例：
+```
+flash                         → 烧录解析到的项目根下的 build\
+flash --runner openocd        → 指定 runner
+flash -d build2               → 烧录 <项目根>\build2
+```
+
+### flash.ps1
+
+PowerShell 版，`-Opts` 传额外参数。
+
+### dust.cmd
+
+子命令分发入口（把 `framework/cmd/build` 加进 PATH 后可直接用 `dust`）：
+
+```
+dust build <board_cfg> [west-args...]
+dust flash [west-flash-args...]
+```
 
 ## 设计原则
 
