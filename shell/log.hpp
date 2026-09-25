@@ -2,8 +2,8 @@
  * @file log.hpp
  * @author qingyu
  * @brief DUST_LOG 自研日志系统 — 四色一次性日志 + DBG 可选择流式日志
- * @version 0.1
- * @date 2026-08-06
+ * @version 0.2
+ * @date 2026-09-21
  *
  * @copyright Copyright (c) 2026
  *
@@ -42,7 +42,7 @@ enum class LogColor : uint32_t
     Red    = 0xF50002,  // 亮红（ERR）
     Green  = 0x00F700,  // 亮绿（OK）
     Orange = 0xF6A753,  // 亮橙（WRN）
-    White  = 0xFFFFFF,  // 白（DBG）
+    Mint   = 0x7BF7CD,  // 薄荷绿（DBG）
 };
 
 /**
@@ -111,7 +111,7 @@ public:
     static bool Select(const char* name);                					// 选中：active_ 指向该条目（同一时间只保留一条）
     static void Deselect() { active_ = nullptr; MarkStaleDbg(); }  			// 停止打印：active_ = nullptr
     
-    static void Dbgl(LogEntry* e, const char* fmt, ...); 					// DBG 流式打印（仅 e==active_ 才发，白色）
+    static void Dbgl(LogEntry* e, const char* fmt, ...); 					// DBG 流式打印（仅 e==active_ 才发，薄荷绿）
     static void Inf(const char* fmt, ...);               					// 一次性，黑色
     static void Err(const char* fmt, ...);               					// 一次性，红色
     static void Ok(const char* fmt, ...);                					// 一次性，绿色

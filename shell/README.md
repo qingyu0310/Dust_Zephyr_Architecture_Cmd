@@ -55,7 +55,7 @@ DUST_LOG_INF("vx=%.2f", vx);              // 黑色 [inf]，一次性
 DUST_LOG_ERR("can tx fail %d", ret);      // 亮红 [err]，一次性
 DUST_LOG_OK("power in budget");           // 亮绿 [ok]，一次性
 DUST_LOG_WRN("imu drift");                // 亮橙 [wrn]，一次性
-DUST_LOG_DBG("test_vx", "vx=%.2f", vx);   // 白色，带名字——默认静默，log on test_vx 后流式打印
+DUST_LOG_DBG("test_vx", "vx=%.2f", vx);   // 薄荷绿，带名字——默认静默，log on test_vx 后流式打印
 ```
 
 ### 注册调试变量
@@ -98,7 +98,7 @@ enum class LogColor : uint32_t
     Red    = 0xF50002,  // 亮红（ERR）
     Green  = 0x00F700,  // 亮绿（OK）
     Orange = 0xF6A753,  // 亮橙（WRN）
-    White  = 0xFFFFFF,  // 白（DBG）
+    Mint   = 0x7BF7CD,  // 薄荷绿（DBG）
 };
 
 // 发送优先级：数值越小越靠前发
@@ -171,7 +171,7 @@ struct LogRecord      // 日志原始请求（未格式化，异步段生产队�
 | 函数 | 路径 |
 |------|------|
 | `Inf/Err/Ok/Wrn`（[log.cpp](log.cpp)） | `PrintColor(color, fmt, ap)` |
-| `Dbgl`（[log.cpp](log.cpp)） | `e != active_` 静默；否则分时段走快照或直发（DBG 白色） |
+| `Dbgl`（[log.cpp](log.cpp)） | `e != active_` 静默；否则分时段走快照或直发（DBG 薄荷绿） |
 | `SendLine`（[log.cpp](log.cpp)） | 命令响应直发（不经过 log 过滤，带 `\r\n`，Cmd 档）——非实时路径，保持 vsnprintf |
 
 `PrintColor` 内部按 **`shell_own_` 分时段**（详见 §3.5）：

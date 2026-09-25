@@ -2,8 +2,8 @@
  * @file log.cpp
  * @author qingyu
  * @brief DUST_LOG 自研日志系统实现 — 帧池三档优先级仲裁发送
- * @version 0.1
- * @date 2026-08-06
+ * @version 0.2
+ * @date 2026-09-21
  *
  * @copyright Copyright (c) 2026
  *
@@ -86,7 +86,7 @@ bool Log::Select(const char* name)
 }
 
 /**
- * @brief DBG 流式打印（仅当 e 是当前选中条目才发，白色，低优先级）
+ * @brief DBG 流式打印（仅当 e 是当前选中条目才发，薄荷绿，低优先级）
  *
  * 分时段：同步段调用点 vsnprintf + 直发；异步段参数快照入队，shell 线程 FormatRecord。
  *
@@ -103,13 +103,13 @@ void Log::Dbgl(LogEntry* e, const char* fmt, ...)
     va_list ap;
     va_start(ap, fmt);
 
-    // 异步段（shell 接管后）：参数快照（DBG 白色）
+    // 异步段（shell 接管后）：参数快照（DBG 薄荷绿）
     uint32_t args[kMaxLogArgs];
     uint8_t  nargs = 0;
     SnapshotArgs(fmt, ap, args, &nargs);
     va_end(ap);
 
-    TryEnqueueRecord(fmt, LogColor::White, TxPriority::Dbg, args, nargs);
+    TryEnqueueRecord(fmt, LogColor::Mint, TxPriority::Dbg, args, nargs);
 
     unsigned key = irq_lock();
     if (!sending_ && stream_ != nullptr) k_sem_give(&stream_->sem_);
