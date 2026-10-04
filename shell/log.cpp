@@ -1,9 +1,9 @@
-/**
+﻿/**
  * @file log.cpp
  * @author qingyu
  * @brief DUST_LOG 自研日志系统实现 — 帧池三档优先级仲裁发送
- * @version 0.2
- * @date 2026-09-21
+ * @version 0.3
+ * @date 2026-09-29
  *
  * @copyright Copyright (c) 2026
  *
@@ -27,7 +27,7 @@ constexpr uint16_t kLineOutExtra  = 4;			// 行输出缓冲额外预留（\r\n�
  * @brief 初始化日志系统
  *
  * 清空选中状态/条目计数，重建空闲帧链表（0→1→…→255），
- * 发送队列置空。DBG 条目由 FindOrCreate 运行时创建，无链接段遍历。
+ * 发送队列置空。DBG 条目由 FindOrCreateDebugEntry 运行时创建，无链接段遍历。
  *
  * @return true 初始化成功
  */
@@ -36,8 +36,8 @@ bool Log::Init()
     active_  = nullptr;
     count_   = 0;
     sending_ = false;
-    txq_.Reset();
-    recq_.Reset();
+    txq_.ResetFrameQueue();
+    recq_.ResetRecordQueue();
     return true;
 }
 
@@ -46,7 +46,7 @@ bool Log::Init()
  * @param name DBG 名字（字符串字面量）
  * @return 条目指针；池满无法创建返回 nullptr
  */
-LogEntry* Log::FindOrCreate(const char* name)
+LogEntry* Log::FindOrCreateDebugEntry(const char* name)
 {
     for (uint8_t i = 0; i < count_; ++i)
     {
@@ -71,34 +71,37 @@ LogEntry* Log::FindOrCreate(const char* name)
  * @param name DBG 名字
  * @return true 选中成功；false 条目不存在
  */
-bool Log::Select(const char* name)
+bool Log::SelectDebugEntry(const char* name)
 {
     for (uint8_t i = 0; i < count_; ++i)
     {
         if (std::strcmp(entries_[i].name, name) == 0)
         {
             active_ = &entries_[i];
-            MarkStaleDbg();       			// 及时顶替：队列中残留的旧 Dbg 档帧作废（Dequeue 跳过回收）
+            unsigned key = irq_lock();            	// 并发保护（任务上下文）
+            txq_.MarkDebugFramesStaleLocked();
+            recq_.MarkDebugRecordsStaleLocked();
+            irq_unlock(key);       					// 及时顶替：队列中残留的旧 Dbg 档帧/记录作废（PopNext* 跳过回收）
             return true;
         }
     }
-    return false;                 			// 不存在：log on 回 not found
+    return false;                 					// 不存在：log on 回 not found
 }
 
 /**
  * @brief DBG 流式打印（仅当 e 是当前选中条目才发，薄荷绿，低优先级）
  *
- * 分时段：同步段调用点 vsnprintf + 直发；异步段参数快照入队，shell 线程 FormatRecord。
+ * 分时段：同步段调用点 vsnprintf + 直发；异步段参数快照入队，shell 线程 FormatRecordToFrame。
  *
- * @param e   DBG 条目（FindOrCreate 返回值）
+ * @param e   DBG 条目（FindOrCreateDebugEntry 返回值）
  * @param fmt 格式化串
  */
-void Log::Dbgl(LogEntry* e, const char* fmt, ...)
+void Log::PrintSelectedDebug(LogEntry* e, const char* fmt, ...)
 {
-	if (!shell_own_) return;                // boot 早期无 DBG（未选中不可用），直接返回
-	
-    if (e == nullptr) return;               // 池满（FindOrCreate 返回 nullptr）：静默丢弃
-    if (e != active_) return;               // 未选中，静默
+	if (!shell_own_) return;                		// boot 早期无 DBG（未选中不可用），直接返回
+
+    if (e == nullptr) return;               		// 池满（FindOrCreateDebugEntry 返回 nullptr）：静默丢弃
+    if (e != active_) return;               		// 未选中，静默
 
     va_list ap;
     va_start(ap, fmt);
@@ -106,10 +109,10 @@ void Log::Dbgl(LogEntry* e, const char* fmt, ...)
     // 异步段（shell 接管后）：参数快照（DBG 薄荷绿）
     uint32_t args[kMaxLogArgs];
     uint8_t  nargs = 0;
-    SnapshotArgs(fmt, ap, args, &nargs);
+    CopyFormatArgs(fmt, ap, args, &nargs);
     va_end(ap);
 
-    TryEnqueueRecord(fmt, LogColor::Mint, TxPriority::Dbg, args, nargs);
+    QueueLogRecord(fmt, LogColor::Mint, TxPriority::Dbg, args, nargs);
 
     unsigned key = irq_lock();
     if (!sending_ && stream_ != nullptr) k_sem_give(&stream_->sem_);
@@ -120,11 +123,11 @@ void Log::Dbgl(LogEntry* e, const char* fmt, ...)
  * @brief 一次性日志，黑色
  * @param fmt 格式化串
  */
-void Log::Inf(const char* fmt, ...)
+void Log::PrintInfo(const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    PrintColor(LogColor::Black, fmt, ap);
+    PrintColoredLog(LogColor::Black, fmt, ap);
     va_end(ap);
 }
 
@@ -132,11 +135,11 @@ void Log::Inf(const char* fmt, ...)
  * @brief 一次性日志，红色
  * @param fmt 格式化串
  */
-void Log::Err(const char* fmt, ...)
+void Log::PrintError(const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    PrintColor(LogColor::Red, fmt, ap);
+    PrintColoredLog(LogColor::Red, fmt, ap);
     va_end(ap);
 }
 
@@ -144,11 +147,11 @@ void Log::Err(const char* fmt, ...)
  * @brief 一次性日志，绿色（状态正常）
  * @param fmt 格式化串
  */
-void Log::Ok(const char* fmt, ...)
+void Log::PrintOk(const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    PrintColor(LogColor::Green, fmt, ap);
+    PrintColoredLog(LogColor::Green, fmt, ap);
     va_end(ap);
 }
 
@@ -156,11 +159,11 @@ void Log::Ok(const char* fmt, ...)
  * @brief 一次性日志，橘色
  * @param fmt 格式化串
  */
-void Log::Wrn(const char* fmt, ...)
+void Log::PrintWarning(const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    PrintColor(LogColor::Orange, fmt, ap);
+    PrintColoredLog(LogColor::Orange, fmt, ap);
     va_end(ap);
 }
 
@@ -168,13 +171,13 @@ void Log::Wrn(const char* fmt, ...)
  * @brief 通用：格式化 + ANSI 上色 + 仲裁发送（事件档）
  *
  * 分时段：boot 早期（!shell_own_）调用点 vsnprintf + 直发（无实时要求，现状）；
- * shell 接管后（shell_own_）参数快照入队，格式化由 shell 线程 FormatRecord 完成。
+ * shell 接管后（shell_own_）参数快照入队，格式化由 shell 线程 FormatRecordToFrame 完成。
  *
  * @param c   颜色
  * @param fmt 格式化串
  * @param ap  可变参数
  */
-void Log::PrintColor(LogColor c, const char* fmt, va_list ap)
+void Log::PrintColoredLog(LogColor c, const char* fmt, va_list ap)
 {
     if (!shell_own_)                          									// 同步段（boot 早期）：调用点直发，现状不变
     {
@@ -184,19 +187,19 @@ void Log::PrintColor(LogColor c, const char* fmt, va_list ap)
         char out[kLogBufSize + kColorOutExtra];
         const uint32_t rgb = static_cast<uint32_t>(c);
         int n = snprintf(out, sizeof(out), "\x1b[38;2;%d;%d;%dm%s\x1b[0m\r\n", (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, buf);
-        if (n > 0) PublishDirect(out, n, TxPriority::Event);   // boot 早期普通日志：调用点直发
+        if (n > 0) QueueFrameAndSendNow(out, n, TxPriority::Event);   	// boot 早期普通日志：调用点直发
         return;
     }
 
     // 异步段（shell 接管后）：参数快照入队，调用点不格式化
     uint32_t args[kMaxLogArgs];
     uint8_t  nargs = 0;
-    SnapshotArgs(fmt, ap, args, &nargs);      // 在 va_end 前快照
+    CopyFormatArgs(fmt, ap, args, &nargs);      // 在 va_end 前快照
 
-    TryEnqueueRecord(fmt, c, TxPriority::Event, args, nargs);    // 入原始请求队列
+    QueueLogRecord(fmt, c, TxPriority::Event, args, nargs);    	// 入原始请求队列
 
     unsigned key = irq_lock();
-    if (!sending_ && stream_ != nullptr) k_sem_give(&stream_->sem_);   		// 唤醒 shell 去 FormatRecord
+    if (!sending_ && stream_ != nullptr) k_sem_give(&stream_->sem_);   		// 唤醒 shell 去 FormatRecordToFrame
     irq_unlock(key);
 }
 
@@ -204,11 +207,11 @@ void Log::PrintColor(LogColor c, const char* fmt, va_list ap)
  * @brief 命令响应直发（不经过 log 过滤，带 \r\n，中档）
  * @param text 响应文本
  */
-void Log::SendLine(const char* text)
+void Log::SendCommandLine(const char* text)
 {
     char out[kLogBufSize + kLineOutExtra];
     int n = snprintf(out, sizeof(out), "%s\r\n", text);
-    if (n > 0) PublishDirect(out, n, TxPriority::Cmd);   // 命令响应：调用点直发（帧池 8 缓冲突发）
+    if (n > 0) QueueFrameAndSendNow(out, n, TxPriority::Cmd);   // 命令响应：调用点直发（帧池 8 缓冲突发）
 }
 
 /**
@@ -222,7 +225,7 @@ void Log::SendLine(const char* text)
  * @param args  输出：参数槽
  * @param nargs 输出：槽数
  */
-void Log::SnapshotArgs(const char* fmt, va_list ap, uint32_t* args, uint8_t* nargs)
+void Log::CopyFormatArgs(const char* fmt, va_list ap, uint32_t* args, uint8_t* nargs)
 {
     uint8_t n = 0;
 
@@ -292,10 +295,10 @@ void Log::SnapshotArgs(const char* fmt, va_list ap, uint32_t* args, uint8_t* nar
  * @param args  参数槽
  * @param nargs 槽数
  */
-void Log::TryEnqueueRecord(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs)
+void Log::QueueLogRecord(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs)
 {
     unsigned key = irq_lock();                // 并发保护（任务或 ISR 上下文）
-    (void)recq_.PushLocked(fmt, color, prio, args, nargs);
+    (void)recq_.PushLogRecordLocked(fmt, color, prio, args, nargs);
     irq_unlock(key);
 }
 
@@ -305,18 +308,18 @@ void Log::TryEnqueueRecord(const char* fmt, LogColor color, TxPriority prio, con
  * 记录在格式化完成后再归还空闲链，避免出队后立即被 ISR 复用。
  * @return true 处理了一条记录；false 队列为空
  */
-bool Log::ProcessOneRecord()
+bool Log::FormatOnePendingRecord()
 {
     unsigned key = irq_lock();
-    LogRecord* r = recq_.PopLocked();
+    LogRecord* r = recq_.PopNextRecordLocked();
     irq_unlock(key);
 
     if (r == nullptr) return false;
 
-    FormatRecord(r);
+    FormatRecordToFrame(r);
 
     key = irq_lock();
-    recq_.ReleaseLocked(r);
+    recq_.ReleaseRecordLocked(r);
     irq_unlock(key);
     return true;
 }
@@ -325,11 +328,11 @@ bool Log::ProcessOneRecord()
  * @brief 展开日志请求为格式化字符串并入 TxFrame 帧池（shell 线程）
  *
  * 逐转换符从 args 取槽，用 picolibc snprintf 展开；%f 从 2 槽拼回 double。
- * 展开结果复用 PrintColor 的 ANSI 组装方式。不依赖 libc va_list。
+ * 展开结果复用 PrintColoredLog 的 ANSI 组装方式。不依赖 libc va_list。
  *
  * @param r 日志请求记录
  */
-void Log::FormatRecord(LogRecord* r)
+void Log::FormatRecordToFrame(LogRecord* r)
 {
     char   buf[kLogBufSize];
     size_t pos = 0;
@@ -408,18 +411,218 @@ void Log::FormatRecord(LogRecord* r)
     }
     buf[pos] = '\0';
 
-    // ANSI 上色 + \r\n（复用 PrintColor 组装）
+    // ANSI 上色 + \r\n（复用 PrintColoredLog 组装）
     char out[kLogBufSize + kColorOutExtra];
     const uint32_t rgb = static_cast<uint32_t>(r->color);
     int n = snprintf(out, sizeof(out), "\x1b[38;2;%d;%d;%dm%s\x1b[0m\r\n", (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, buf);
-	
-    if (n > 0) PublishQueued(out, n, r->prio);             // 线程展开后按原始请求档位入队
+
+    if (n > 0) QueueFrameForShellSend(out, n, r->prio);             // 线程展开后按原始请求档位入队
+}
+
+/**
+ * @brief 直发原语：入帧池 + 立即 StartFrameSend（调用点直发）
+ *
+ * 入队成功后若 DMA 空闲，调用点直接弹帧提交发送（帧即取即还），
+ * 不依赖 shell 线程泵。用于命令响应 / boot 早期同步段直发路径。
+ *
+ * @param data 发送内容（已格式化，可能含 ANSI 颜色）
+ * @param len  数据长度
+ * @param prio 优先级档位
+ */
+void Log::QueueFrameAndSendNow(const char* data, int len, TxPriority prio)
+{
+    unsigned key = irq_lock();            // 并发保护
+
+    if (txq_.PushFrameLocked(data, len, prio, !k_is_in_isr()))   // 入帧池：截断 + 取帧 + 按档插队（ISR 池满直接丢）
+    {
+        if (!sending_)                    // DMA 空闲 → 调用点直发（帧即取即还）
+        {
+            TxFrame* next = txq_.PopNextFrameLocked();                // 弹队头（遇作废帧跳过回收）
+            if (next != nullptr) StartFrameSend(next);
+        }
+    }
+
+    irq_unlock(key);
+}
+
+/**
+ * @brief 异步原语：入帧池 + give（shell 线程泵发送）
+ *
+ * 入队成功后若 DMA 空闲，give 唤醒 shell 线程去 SendNextFrameIfIdle 续发。
+ * 用于异步段格式化后入队（FormatRecordToFrame 结果），DMA 提交交给 shell 线程。
+ *
+ * @param data 发送内容（已格式化，可能含 ANSI 颜色）
+ * @param len  数据长度
+ * @param prio 优先级档位
+ */
+void Log::QueueFrameForShellSend(const char* data, int len, TxPriority prio)
+{
+    unsigned key = irq_lock();            // 并发保护
+
+    if (txq_.PushFrameLocked(data, len, prio, !k_is_in_isr()))   // 入帧池：截断 + 取帧 + 按档插队（ISR 池满直接丢）
+    {
+        if (!sending_ && stream_ != nullptr) k_sem_give(&stream_->sem_);   // shell 泵
+    }
+
+    irq_unlock(key);
+}
+
+/**
+ * @brief log 命令入口（log list/on/off）
+ * @param line 子命令参数（不含 "log" 前缀）
+ */
+void Log::ProcessLogCommand(uint8_t* line)
+{
+    while (*line == ' ') line++;
+    uint8_t* sub = line;
+    while (*line && *line != ' ') line++;
+    if (*line == ' ') { *line = '\0'; line++; }
+    while (*line == ' ') line++;
+
+    if (std::strcmp(reinterpret_cast<const char*>(sub), "list") == 0)
+    {
+        PrintLogList();
+    }
+    else if (std::strcmp(reinterpret_cast<const char*>(sub), "on") == 0)
+    {
+        if (SelectDebugEntry(reinterpret_cast<const char*>(line))) SendCommandLine("log on: ok");
+        else SendCommandLine("log on: not found");
+    }
+    else if (std::strcmp(reinterpret_cast<const char*>(sub), "off") == 0)
+    {
+        DeselectDebugEntry();
+        SendCommandLine("log off: ok");
+    }
+    else SendCommandLine("?: log list|on <name>|off");
+}
+
+/**
+ * @brief log list：遍历所有已注册 DBG 条目输出（名字 + 选中状态）
+ */
+void Log::PrintLogList()
+{
+    const LogEntry* active = ActiveDebugEntry();
+    for (const LogEntry* e = FirstDebugEntry(); e != nullptr; e = NextDebugEntry(e))
+    {
+        char line[160];
+        snprintf(line, sizeof(line), "%s %s", e->name,
+                 (e == active) ? "[ON]" : "[off]");
+        SendCommandLine(line);
+    }
+}
+
+/**
+ * @brief 重置原始请求池和 FIFO 队列
+ *
+ * 清队头/队尾，重建空闲记录链（0→1→…→255）。
+ */
+void Log::LogRecordQueue::ResetRecordQueue()
+{
+    head = kNullIndex;
+    tail = kNullIndex;
+    free_head = 0;
+    for (uint8_t i = 0; i < kMaxLogRecords; ++i)
+    {
+        records[i].is_stale = false;
+        records[i].next = (i + 1 < kMaxLogRecords) ? static_cast<uint8_t>(i + 1) : kNullIndex;
+    }
+}
+
+/**
+ * @brief 入队一条原始请求（FIFO 尾插）
+ *
+ * 池满直接返回 false（不挤帧，ISR 安全）。调用者须持有 irq_lock。
+ *
+ * @param fmt   格式串（静态字面量）
+ * @param color 颜色
+ * @param prio  展开后的发送优先级
+ * @param args  参数槽
+ * @param nargs 槽数
+ * @return true 入队成功；false 池满丢弃
+ */
+bool Log::LogRecordQueue::PushLogRecordLocked(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs)
+{
+    if (free_head == kNullIndex) return false;
+    if (nargs > kMaxLogArgs) nargs = kMaxLogArgs;
+
+    uint8_t i = free_head;
+    free_head = records[i].next;
+
+    records[i].fmt 		= fmt;
+    records[i].color 	= color;
+    records[i].prio 	= prio;
+    records[i].is_stale = false;
+    records[i].nargs 	= nargs;
+    for (uint8_t k = 0; k < nargs; ++k) records[i].args[k] = args[k];
+    records[i].next = kNullIndex;
+
+    if (head == kNullIndex)
+    {
+        head = tail = i;
+    }
+    else
+    {
+        records[tail].next = i;
+        tail = i;
+    }
+    return true;
+}
+
+/**
+ * @brief 队列弹头：is_stale 作废记录跳过并回收（DBG 切换及时顶替）
+ * @return 待处理记录指针；队列空返回 nullptr
+ */
+LogRecord* Log::LogRecordQueue::PopNextRecordLocked()
+{
+    while (head != kNullIndex)
+    {
+        uint8_t i = head;
+        head = records[i].next;
+        if (head == kNullIndex) tail = kNullIndex;
+
+        records[i].next = kNullIndex;
+        if (records[i].is_stale)
+        {
+            ReleaseRecordLocked(&records[i]);
+            continue;
+        }
+        return &records[i];
+    }
+    return nullptr;
+}
+
+/**
+ * @brief 归还记录到空闲链（头插）
+ *
+ * 必须在 FormatRecordToFrame 完成后调用，避免出队后记录立即被 ISR 复用。
+ *
+ * @param r 待归还的记录
+ */
+void Log::LogRecordQueue::ReleaseRecordLocked(LogRecord* r)
+{
+    uint8_t i = static_cast<uint8_t>(r - records);   // 记录指针 → 记录池索引
+    r->is_stale = false;
+    r->next = free_head;
+    free_head = i;
+}
+
+/**
+ * @brief 队列中所有 Dbg 档记录标记作废（Event/Cmd 不动，及时顶替）
+ */
+void Log::LogRecordQueue::MarkDebugRecordsStaleLocked()
+{
+    uint8_t cur = head;
+    while (cur != kNullIndex)
+    {
+        if (records[cur].prio == TxPriority::Dbg) records[cur].is_stale = true;
+        cur = records[cur].next;
+    }
 }
 
 /**
  * @brief 重置发送帧池和发送队列
  */
-void Log::TxFrameQueue::Reset()
+void Log::TxFrameQueue::ResetFrameQueue()
 {
     head = kNullIndex;
     tail = kNullIndex;
@@ -432,12 +635,11 @@ void Log::TxFrameQueue::Reset()
     }
 }
 
-uint8_t Log::TxFrameQueue::IndexOf(const TxFrame* f) const
-{
-    return static_cast<uint8_t>(f - frames);
-}
-
-TxFrame* Log::TxFrameQueue::AllocLocked()
+/**
+ * @brief 从空闲帧链取一帧（摘链，next 置空）
+ * @return 空闲帧指针；空闲链空返回 nullptr
+ */
+TxFrame* Log::TxFrameQueue::AllocateFreeFrameLocked()
 {
     if (free_head == kNullIndex) return nullptr;
 
@@ -447,24 +649,33 @@ TxFrame* Log::TxFrameQueue::AllocLocked()
     return &frames[i];
 }
 
-void Log::TxFrameQueue::ReleaseLocked(TxFrame* f)
+/**
+ * @brief 归还帧到空闲链（头插，清作废标记）
+ * @param f 待归还的帧
+ */
+void Log::TxFrameQueue::ReleaseFrameLocked(TxFrame* f)
 {
-    uint8_t i = IndexOf(f);
+    uint8_t i = static_cast<uint8_t>(f - frames);   // 帧指针 → 帧池索引
     f->is_stale = false;
     f->next = free_head;
     free_head = i;
 }
 
-void Log::TxFrameQueue::PushByPrioLocked(TxFrame* f)
+/**
+ * @brief 按优先级插队入队（同档保 FIFO：插在同档末尾）
+ * @param f 待入队的帧（data/len/prio 已填好）
+ */
+void Log::TxFrameQueue::InsertFrameByPriorityLocked(TxFrame* f)
 {
+    const uint8_t idx = static_cast<uint8_t>(f - frames);   // 帧指针 → 帧池索引
+
     f->next = kNullIndex;
-    if (head == kNullIndex) { head = tail = IndexOf(f); return; }
+    if (head == kNullIndex) { head = tail = idx; return; }
 
     uint8_t* pp = &head;              			// 找插入点：第一个 prio > f->prio 的帧之前
     while (*pp != kNullIndex && frames[*pp].prio <= f->prio)
         pp = &frames[*pp].next;
 
-    uint8_t idx = IndexOf(f);
     f->next = *pp;
     *pp = idx;
     if (f->next == kNullIndex) tail = idx;
@@ -474,7 +685,7 @@ void Log::TxFrameQueue::PushByPrioLocked(TxFrame* f)
  * @brief 池满挤帧：从队尾往前找第一个非事件帧（优先挤 DBG，其次命令响应）
  * @return 被挤出的帧指针；队列全是事件帧（极端）返回 nullptr
  */
-TxFrame* Log::TxFrameQueue::EvictLowestLocked()
+TxFrame* Log::TxFrameQueue::EvictLowestPriorityFrameLocked()
 {
     if (head == kNullIndex) return nullptr;
 
@@ -495,8 +706,8 @@ TxFrame* Log::TxFrameQueue::EvictLowestLocked()
 		head = frames[victim].next;
 	} else {
 		frames[victim_prev].next = frames[victim].next;
-	}                           
-	 	
+	}
+
     if (frames[victim].next == kNullIndex) tail = victim_prev;
 
     frames[victim].next = kNullIndex;
@@ -508,7 +719,7 @@ TxFrame* Log::TxFrameQueue::EvictLowestLocked()
  * @brief 队列弹头：is_stale 作废帧跳过并回收（DBG 切换及时顶替）
  * @return 待发送帧指针；队列空返回 nullptr
  */
-TxFrame* Log::TxFrameQueue::PopLocked()
+TxFrame* Log::TxFrameQueue::PopNextFrameLocked()
 {
     while (head != kNullIndex)
     {
@@ -519,7 +730,7 @@ TxFrame* Log::TxFrameQueue::PopLocked()
         frames[i].next = kNullIndex;
         if (frames[i].is_stale)
         {
-            ReleaseLocked(&frames[i]);   // 作废帧：回收不发送
+            ReleaseFrameLocked(&frames[i]);   // 作废帧：回收不发送
             continue;
         }
         return &frames[i];
@@ -530,7 +741,7 @@ TxFrame* Log::TxFrameQueue::PopLocked()
 /**
  * @brief 切换/关闭时：队列中所有 Dbg 档帧标记作废（Event/Cmd 不动，及时顶替）
  */
-void Log::TxFrameQueue::MarkStaleDbgLocked()
+void Log::TxFrameQueue::MarkDebugFramesStaleLocked()
 {
     uint8_t cur = head;
     while (cur != kNullIndex)
@@ -550,16 +761,16 @@ void Log::TxFrameQueue::MarkStaleDbgLocked()
  * @param len  数据长度
  * @param prio 优先级档位
  */
-bool Log::TxFrameQueue::PushLocked(const char* data, int len, TxPriority prio, bool allow_evict)
+bool Log::TxFrameQueue::PushFrameLocked(const char* data, int len, TxPriority prio, bool allow_evict)
 {
-    if (len > kTxMaxLen) len = kTxMaxLen; // 超长截断
+    if (len > kTxMaxLen) len = kTxMaxLen; 	// 超长截断
 
-    TxFrame* f = AllocLocked();            // 从空闲池取帧
+    TxFrame* f = AllocateFreeFrameLocked();            	// 从空闲池取帧
     if (f == nullptr)
     {
-        if (!allow_evict) return false;  // ISR：池满直接丢，不 Evict 遍历链表
-        f = EvictLowestLocked();         // 线程上下文池满：挤最低优先级帧（DBG 先、命令次、事件永不挤）
-        if (f == nullptr) return false;   // 池满且全是事件帧（极端）→ 丢弃
+        if (!allow_evict) return false;  	// ISR：池满直接丢，不 Evict 遍历链表
+        f = EvictLowestPriorityFrameLocked();         	// 线程上下文池满：挤最低优先级帧（DBG 先、命令次、事件永不挤）
+        if (f == nullptr) return false;   	// 池满且全是事件帧（极端）→ 丢弃
     }
 
     std::memcpy(f->data, data, static_cast<size_t>(len));
@@ -567,200 +778,8 @@ bool Log::TxFrameQueue::PushLocked(const char* data, int len, TxPriority prio, b
     f->prio = prio;
     f->is_stale = false;
 
-    PushByPrioLocked(f);                  // 按档位插队
+    InsertFrameByPriorityLocked(f);                  	// 按档位插队
     return true;
-}
-
-void Log::LogRecordQueue::Reset()
-{
-    head = kNullIndex;
-    tail = kNullIndex;
-    free_head = 0;
-    for (uint8_t i = 0; i < kMaxLogRecords; ++i)
-    {
-        records[i].is_stale = false;
-        records[i].next = (i + 1 < kMaxLogRecords) ? static_cast<uint8_t>(i + 1) : kNullIndex;
-    }
-}
-
-uint8_t Log::LogRecordQueue::IndexOf(const LogRecord* r) const
-{
-    return static_cast<uint8_t>(r - records);
-}
-
-bool Log::LogRecordQueue::PushLocked(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs)
-{
-    if (free_head == kNullIndex) return false;
-    if (nargs > kMaxLogArgs) nargs = kMaxLogArgs;
-
-    uint8_t i = free_head;
-    free_head = records[i].next;
-
-    records[i].fmt = fmt;
-    records[i].color = color;
-    records[i].prio = prio;
-    records[i].is_stale = false;
-    records[i].nargs = nargs;
-    for (uint8_t k = 0; k < nargs; ++k) records[i].args[k] = args[k];
-    records[i].next = kNullIndex;
-
-    if (head == kNullIndex)
-    {
-        head = tail = i;
-    }
-    else
-    {
-        records[tail].next = i;
-        tail = i;
-    }
-    return true;
-}
-
-LogRecord* Log::LogRecordQueue::PopLocked()
-{
-    while (head != kNullIndex)
-    {
-        uint8_t i = head;
-        head = records[i].next;
-        if (head == kNullIndex) tail = kNullIndex;
-
-        records[i].next = kNullIndex;
-        if (records[i].is_stale)
-        {
-            ReleaseLocked(&records[i]);
-            continue;
-        }
-        return &records[i];
-    }
-    return nullptr;
-}
-
-void Log::LogRecordQueue::ReleaseLocked(LogRecord* r)
-{
-    uint8_t i = IndexOf(r);
-    r->is_stale = false;
-    r->next = free_head;
-    free_head = i;
-}
-
-void Log::LogRecordQueue::MarkStaleDbgLocked()
-{
-    uint8_t cur = head;
-    while (cur != kNullIndex)
-    {
-        if (records[cur].prio == TxPriority::Dbg) records[cur].is_stale = true;
-        cur = records[cur].next;
-    }
-}
-
-TxFrame* Log::Dequeue()
-{
-    return txq_.PopLocked();
-}
-
-void Log::MarkStaleDbg()
-{
-    unsigned key = irq_lock();            // 并发保护（任务上下文）
-    txq_.MarkStaleDbgLocked();
-    recq_.MarkStaleDbgLocked();
-    irq_unlock(key);
-}
-
-bool Log::EnqueueFrame(const char* data, int len, TxPriority prio)
-{
-    return txq_.PushLocked(data, len, prio, !k_is_in_isr());
-}
-
-/**
- * @brief 直发原语：入帧池 + 立即 SendFrame（调用点直发）
- *
- * 入队成功后若 DMA 空闲，调用点直接弹帧提交发送（帧即取即还），
- * 不依赖 shell 线程泵。用于命令响应 / boot 早期同步段直发路径。
- *
- * @param data 发送内容（已格式化，可能含 ANSI 颜色）
- * @param len  数据长度
- * @param prio 优先级档位
- */
-void Log::PublishDirect(const char* data, int len, TxPriority prio)
-{
-    unsigned key = irq_lock();            // 并发保护
-
-    if (EnqueueFrame(data, len, prio))
-    {
-        if (!sending_)                    // DMA 空闲 → 调用点直发（帧即取即还）
-        {
-            TxFrame* next = Dequeue();
-            if (next != nullptr) SendFrame(next);
-        }
-    }
-
-    irq_unlock(key);
-}
-
-/**
- * @brief 异步原语：入帧池 + give（shell 线程泵发送）
- *
- * 入队成功后若 DMA 空闲，give 唤醒 shell 线程去 PumpSend 续发。
- * 用于异步段格式化后入队（FormatRecord 结果），DMA 提交交给 shell 线程。
- *
- * @param data 发送内容（已格式化，可能含 ANSI 颜色）
- * @param len  数据长度
- * @param prio 优先级档位
- */
-void Log::PublishQueued(const char* data, int len, TxPriority prio)
-{
-    unsigned key = irq_lock();            // 并发保护
-
-    if (EnqueueFrame(data, len, prio))
-    {
-        if (!sending_ && stream_ != nullptr) k_sem_give(&stream_->sem_);   // shell 泵
-    }
-
-    irq_unlock(key);
-}
-
-/**
- * @brief log 命令入口（log list/on/off）
- * @param line 子命令参数（不含 "log" 前缀）
- */
-void Log::Process(uint8_t* line)
-{
-    while (*line == ' ') line++;
-    uint8_t* sub = line;
-    while (*line && *line != ' ') line++;
-    if (*line == ' ') { *line = '\0'; line++; }
-    while (*line == ' ') line++;
-
-    if (std::strcmp(reinterpret_cast<const char*>(sub), "list") == 0)
-    {
-        CmdLogList();
-    }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "on") == 0)
-    {
-        if (Select(reinterpret_cast<const char*>(line))) SendLine("log on: ok");
-        else SendLine("log on: not found");
-    }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "off") == 0)
-    {
-        Deselect();
-        SendLine("log off: ok");
-    }
-    else SendLine("?: log list|on <name>|off");
-}
-
-/**
- * @brief log list：遍历所有已注册 DBG 条目输出（名字 + 选中状态）
- */
-void Log::CmdLogList()
-{
-    const LogEntry* active = Active();
-    for (const LogEntry* e = First(); e != nullptr; e = Next(e))
-    {
-        char line[160];
-        snprintf(line, sizeof(line), "%s %s", e->name,
-                 (e == active) ? "[ON]" : "[off]");
-        SendLine(line);
-    }
 }
 
 } // namespace debug

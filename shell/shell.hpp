@@ -25,7 +25,7 @@ namespace debug
  * @brief 调试控制台线程底座
  *
  * UART 接收循环（k_sem_take 阻塞）→ 逐行解析 → ProcessLine 分发：
- * var → Var::Process、log → Log::Process、h/? → 帮助。
+ * var → Var::Process、log → Log::ProcessLogCommand、h/? → 帮助。
  * var/log 子命令由各自的模块实现（var.hpp / log.hpp）。
  */
 class Shell final

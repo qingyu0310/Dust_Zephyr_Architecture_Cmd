@@ -2,8 +2,8 @@
  * @file log.hpp
  * @author qingyu
  * @brief DUST_LOG 自研日志系统 — 四色一次性日志 + DBG 可选择流式日志
- * @version 0.2
- * @date 2026-09-21
+ * @version 0.3
+ * @date 2026-09-29
  *
  * @copyright Copyright (c) 2026
  *
@@ -60,11 +60,11 @@ enum class TxPriority : uint8_t
  */
 struct TxFrame
 {
-    char       data[kTxFrameSize];   // 格式化后内容（含 ANSI 颜色），超 kTxMaxLen 截断
-    uint16_t   len;                  // 实际有效长度（≤127）
-    TxPriority prio;                 // 优先级档位（§5.1 优先级表）
-    bool       is_stale;             // DBG 切换时标记作废（及时顶替用）
-    uint8_t    next;                 // 帧索引链表（255=nullptr）
+    char       data[kTxFrameSize];   			// 格式化后内容（含 ANSI 颜色），超 kTxMaxLen 截断
+    uint16_t   len;                  			// 实际有效长度（≤127）
+    TxPriority prio;                 			// 优先级档位（§5.1 优先级表）
+    bool       is_stale;             			// DBG 切换时标记作废（及时顶替用）
+    uint8_t    next;                 			// 帧索引链表（255=nullptr）
 };
 
 /**
@@ -72,24 +72,24 @@ struct TxFrame
  */
 struct LogEntry
 {
-    const char* name;   // DBG 名字（log on 用，运行时 FindOrCreate 创建）
+    const char* name;   						// DBG 名字（log on 用，运行时 FindOrCreateDebugEntry 创建）
 };
 
 /**
  * @brief 日志原始请求（未格式化，异步段生产队列条目）
  *
- * 异步段调用点只快照 fmt+参数入队，格式化由 shell 线程 FormatRecord 完成。
+ * 异步段调用点只快照 fmt+参数入队，格式化由 shell 线程 FormatRecordToFrame 完成。
  * args 槽位约定：%f 占 2 槽（double 位模式），%s/%p 指针 1 槽，整型 1 槽。
  */
 struct LogRecord
 {
-    const char* fmt;               // 格式串（静态字面量，禁止临时栈串）
-    LogColor    color;             // 颜色（四色）
-    TxPriority  prio;              // 展开后的发送优先级
-    bool        is_stale;          // DBG 切换/关闭时标记作废
-    uint32_t    args[kMaxLogArgs]; // 参数快照
-    uint8_t     nargs;             // 参数槽数（0~kMaxLogArgs）
-    uint8_t     next;              // 记录链表（数组索引，255=nullptr）
+    const char* fmt;               				// 格式串（静态字面量，禁止临时栈串）
+    LogColor    color;             				// 颜色（四色）
+    TxPriority  prio;              				// 展开后的发送优先级
+    bool        is_stale;          				// DBG 切换/关闭时标记作废
+    uint32_t    args[kMaxLogArgs]; 				// 参数快照
+    uint8_t     nargs;             				// 参数槽数（0~kMaxLogArgs）
+    uint8_t     next;              				// 记录链表（数组索引，255=nullptr）
 };
 
 /**
@@ -105,36 +105,44 @@ struct LogRecord
 class Log
 {
 public:
-    static bool Init();                                  					// 初始化：清 active_/计数/队列池
-    static void BindStream(Stream* s) { stream_ = s; }   					// 绑定发送通道（shell thread_init 调用）
-    static LogEntry* FindOrCreate(const char* name);     					// 按名字查 DBG 条目，首见创建（返回 nullptr=池满）
-    static bool Select(const char* name);                					// 选中：active_ 指向该条目（同一时间只保留一条）
-    static void Deselect() { active_ = nullptr; MarkStaleDbg(); }  			// 停止打印：active_ = nullptr
-    
-    static void Dbgl(LogEntry* e, const char* fmt, ...); 					// DBG 流式打印（仅 e==active_ 才发，薄荷绿）
-    static void Inf(const char* fmt, ...);               					// 一次性，黑色
-    static void Err(const char* fmt, ...);               					// 一次性，红色
-    static void Ok(const char* fmt, ...);                					// 一次性，绿色
-    static void Wrn(const char* fmt, ...);               					// 一次性，橘色
+    static bool      Init();                             						// 初始化：清 active_/计数/队列池
+    static void      BindOutputStream(Stream* s) { stream_ = s; }				// 绑定发送通道（shell thread_init 调用）
+    static LogEntry* FindOrCreateDebugEntry(const char* name);					// 按名字查 DBG 条目，首见创建（返回 nullptr=池满）
+    static bool      SelectDebugEntry(const char* name);           				// 选中：active_ 指向该条目（同一时间只保留一条）
+    static void      DeselectDebugEntry()                                       // 停止打印：active_ = nullptr
+    {
+        active_ = nullptr;
 
-    static void SendLine(const char* text);              					// 命令响应直发（不经过 log 过滤，带 \r\n）
-    static void PumpSend()													// DMA 空闲则续发下一帧（shell 线程驱动）
+        unsigned key = irq_lock();             									// 并发保护（任务上下文）
+        txq_.MarkDebugFramesStaleLocked();             							// 发送队列中 Dbg 档帧作废
+        recq_.MarkDebugRecordsStaleLocked();            						// 原始请求队列中 Dbg 档记录作废
+        irq_unlock(key);
+    }
+
+    static void PrintSelectedDebug(LogEntry* e, const char* fmt, ...);			// DBG 流式打印（仅 e==active_ 才发，薄荷绿）
+    static void PrintInfo(const char* fmt, ...);								// 一次性，黑色
+    static void PrintError(const char* fmt, ...);								// 一次性，红色
+    static void PrintOk(const char* fmt, ...);									// 一次性，绿色
+    static void PrintWarning(const char* fmt, ...);								// 一次性，橘色
+
+    static void SendCommandLine(const char* text);								// 命令响应直发（不经过 log 过滤，带 \r\n）
+    static void MarkShellThreadReady() { shell_own_ = true; }					// shell 线程接管发送（Task 首行调用）
+    static void ProcessLogCommand(uint8_t* line);								// log 命令入口（list/on/off）
+    static void PrintLogList();													// log list：遍历数组输出
+    static bool FormatOnePendingRecord();										// 处理一条原始请求：出队、展开、归还
+
+    static void SendNextFrameIfIdle()											// DMA 空闲则续发下一帧（shell 线程驱动）
     {
         unsigned key = irq_lock();
         if (!sending_)
         {
-            TxFrame* f = Dequeue();
-            if (f != nullptr) SendFrame(f);
+            TxFrame* f = txq_.PopNextFrameLocked();                     		// 弹队头（遇作废帧跳过回收）
+            if (f != nullptr) StartFrameSend(f);
         }
         irq_unlock(key);
-    }                              					
+    }
 
-    static void SetShellOwn() { shell_own_ = true; }     					// shell 线程接管发送（Task 首行调用）
-    static void Process(uint8_t* line);                  					// log 命令入口（list/on/off）
-    static void CmdLogList();                            					// log list：遍历数组输出
-    static bool ProcessOneRecord();                      					// 处理一条原始请求：出队、展开、归还
-	
-	static void OnTxDone()													// TX_DONE 回调（UartDma tx_cb，清标志并通知 shell 续发）
+	static void HandleTxDone()													// TX_DONE 回调（UartDma tx_cb，清标志并通知 shell 续发）
     {
         unsigned key = irq_lock();
         sending_ = false;
@@ -142,39 +150,22 @@ public:
         if (stream_ != nullptr) k_sem_give(&stream_->sem_);
     }
 
-	static const LogEntry* Active() { 										// 当前选中条目（log list 显示 [ON]；返回 nullptr=无）
-		return active_; 
-	}  					
-	static LogEntry* First() { 
-		return (count_ > 0) ? &entries_[0] : nullptr; 						// log list 遍历：数组首个条目（返回 nullptr=空）
-	}  	
-    static LogEntry* Next(const LogEntry* e) { 
-		ptrdiff_t idx = e - entries_; 
-		return (idx + 1 < count_) ? &entries_[idx + 1] : nullptr; 			// log list 遍历：数组下一个条目（返回 nullptr=尾）
-	}  	
-	
-private:
-	static constexpr uint8_t kNullIndex = 255;								// 索引链表空值（255 = 无下一项）
-
-    struct TxFrameQueue
+	static const LogEntry* ActiveDebugEntry()									// 当前选中条目（log list 显示 [ON]；返回 nullptr=无）
     {
-        TxFrame frames[kTxPoolCount];
-        uint8_t free_head;
-        uint8_t head;
-        uint8_t tail;
+        return active_;
+    }
+	static LogEntry* FirstDebugEntry()											// log list 遍历：数组首个条目（返回 nullptr=空）
+    {
+		return (count_ > 0) ? &entries_[0] : nullptr;
+	}
+    static LogEntry* NextDebugEntry(const LogEntry* e)							// log list 遍历：数组下一个条目（返回 nullptr=尾）
+    {
+		ptrdiff_t idx = e - entries_;
+		return (idx + 1 < count_) ? &entries_[idx + 1] : nullptr;
+	}
 
-        void 	 Reset();
-        bool 	 PushLocked(const char* data, int len, TxPriority prio, bool allow_evict);
-        TxFrame* PopLocked();
-        void 	 ReleaseLocked(TxFrame* f);
-        void 	 MarkStaleDbgLocked();
-
-    private:
-        TxFrame* AllocLocked();
-        TxFrame* EvictLowestLocked();
-        void 	 PushByPrioLocked(TxFrame* f);
-        uint8_t  IndexOf(const TxFrame* f) const;
-    };
+private:
+	static constexpr uint8_t kNullIndex = 255;									// 索引链表空值（255 = 无下一项）
 
     struct LogRecordQueue
     {
@@ -183,43 +174,57 @@ private:
         uint8_t head;
         uint8_t tail;
 
-        void Reset();
-        bool PushLocked(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs);
-        LogRecord* PopLocked();
-        void ReleaseLocked(LogRecord* r);
-        void MarkStaleDbgLocked();
+        void ResetRecordQueue();
+        bool PushLogRecordLocked(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs);
+        LogRecord* PopNextRecordLocked();
+        void ReleaseRecordLocked(LogRecord* r);
+        void MarkDebugRecordsStaleLocked();
+    };
+
+    struct TxFrameQueue
+    {
+        TxFrame frames[kTxPoolCount];
+        uint8_t free_head;
+        uint8_t head;
+        uint8_t tail;
+
+        void     ResetFrameQueue();
+        bool     PushFrameLocked(const char* data, int len, TxPriority prio, bool allow_evict);
+        TxFrame* PopNextFrameLocked();
+        void     ReleaseFrameLocked(TxFrame* f);
+        void     MarkDebugFramesStaleLocked();
 
     private:
-        uint8_t IndexOf(const LogRecord* r) const;
+        TxFrame* AllocateFreeFrameLocked();
+        void     InsertFrameByPriorityLocked(TxFrame* f);
+        TxFrame* EvictLowestPriorityFrameLocked();
     };
 
     static inline LogEntry  entries_[kMaxLogEntries] {}; 					// 64 条静态池（DBG，运行时注册）
     static inline LogEntry* active_     = nullptr;       					// 当前选中条目（log on 指向、log off 置空；同一时间只打一条）
     static inline uint8_t   count_      = 0;             					// 已注册条目数
-    static inline Stream*   stream_     = nullptr;       					// 发送通道（BindStream 绑定）
-    static inline TxFrameQueue   txq_   {};             					// 发送帧池 + 三档优先级队列
-    static inline LogRecordQueue recq_  {};             					// 原始请求池 + FIFO 队列
+    static inline Stream*   stream_     = nullptr;       					// 发送通道（BindOutputStream 绑定）
     static inline bool      sending_    = false;         					// 当前是否有帧在 DMA 中
     static inline bool      shell_own_  = false;         					// shell 线程已接管发送（Task 首行置 true，boot 早期为 false 直发）
 
-    static TxFrame* Dequeue();                          																		// 取队头帧（作废帧跳过回收）
-    static void     MarkStaleDbg();                     																		// 切换/关闭时：队列中 Dbg 档帧/记录标记作废（及时顶替）
-	static bool     EnqueueFrame(const char* data, int len, TxPriority prio);  								    				// 锁内公共：截断+取帧+入队（调用者已 irq_lock）
-	static void     PublishDirect(const char* data, int len, TxPriority prio);  												// 直发原语：入帧池+入队+立即 SendFrame（命令响应/boot 日志）
-	static void     PublishQueued(const char* data, int len, TxPriority prio);  												// 异步原语：入帧池+入队+give（shell 线程 FormatRecord 后）
-    static void     PrintColor(LogColor c, const char* fmt, va_list ap);  														// 通用：上色 + 仲裁发送
-    static void     SnapshotArgs(const char* fmt, va_list ap, uint32_t* args, uint8_t* nargs); 									// 参数值快照（异步段调用点）
-    static void     FormatRecord(LogRecord* r);        																			// 展开请求为字符串入帧池（shell 线程）
-    static void     TryEnqueueRecord(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs); 	// 入队原始请求（异步段调用点）
+    static inline TxFrameQueue   txq_   {};             					// 发送帧池 + 三档优先级队列
+    static inline LogRecordQueue recq_  {};             					// 原始请求池 + FIFO 队列
 
-    static void SendFrame(TxFrame* f)
+    static void PrintColoredLog(LogColor c, const char* fmt, va_list ap);												// 通用：上色 + 仲裁发送
+    static void CopyFormatArgs(const char* fmt, va_list ap, uint32_t* args, uint8_t* nargs);							// 参数值快照（异步段调用点）
+    static void QueueLogRecord(const char* fmt, LogColor color, TxPriority prio, const uint32_t* args, uint8_t nargs);	// 入队原始请求（异步段调用点）
+    static void FormatRecordToFrame(LogRecord* r);																		// 展开请求为字符串入帧池（shell 线程）
+	static void QueueFrameAndSendNow(const char* data, int len, TxPriority prio);										// 直发原语：入帧池+入队+立即 StartFrameSend（命令响应/boot 日志）
+	static void QueueFrameForShellSend(const char* data, int len, TxPriority prio);										// 异步原语：入帧池+入队+give（shell 线程 FormatRecordToFrame 后）
+
+    static void StartFrameSend(TxFrame* f)
     {
         sending_ = true;
         if (stream_ == nullptr || !stream_->Send(reinterpret_cast<const uint8_t*>(f->data), f->len))
         {
             sending_ = false;                	 							// 发送失败：不置发送中
         }
-        txq_.ReleaseLocked(f);                      						// 归还空闲池：帧内容已移交 UartDma，立即复用
+        txq_.ReleaseFrameLocked(f);                      						// 归还空闲池：帧内容已移交 UartDma，立即复用
     }              															// DMA 发送一帧
 };
 
@@ -228,17 +233,17 @@ private:
 // ========== 开：真实实现 ==========
 
 // DBG：流式调试日志（默认静默，log on <name> 选中后打印）
-// 名字是字符串字面量，运行时 FindOrCreate 创建/复用条目，无需 DEFINE/链接段
+// 名字是字符串字面量，运行时 FindOrCreateDebugEntry 创建/复用条目，无需 DEFINE/链接段
 #define DUST_LOG_DBG(name_, ...) \
-    ::debug::Log::Dbgl(::debug::Log::FindOrCreate(name_), ##__VA_ARGS__)
+    ::debug::Log::PrintSelectedDebug(::debug::Log::FindOrCreateDebugEntry(name_), ##__VA_ARGS__)
 
 // 一次性四色（调用即打，无名字，用法与 LOG_INF 一致；输出前带 [等级] 前缀）
 // 每帧字节开销（TrueColor 38;2;R;G;B）：[inf]前缀(5) + 颜色(最长18 \x1b[38;2;246;167;83m) + 复位 \x1b[0m(4) + \r\n(2) = 最长29B；
 // 帧上限 127B（kTxMaxLen 截断）→ 内容建议 ≤98B，超出截尾
-#define DUST_LOG_INF(...) ::debug::Log::Inf("[inf] " __VA_ARGS__)
-#define DUST_LOG_ERR(...) ::debug::Log::Err("[err] " __VA_ARGS__)
-#define DUST_LOG_OK(...)  ::debug::Log::Ok("[ok] " __VA_ARGS__)
-#define DUST_LOG_WRN(...) ::debug::Log::Wrn("[wrn] " __VA_ARGS__) 
+#define DUST_LOG_INF(...) ::debug::Log::PrintInfo("[inf] " __VA_ARGS__)
+#define DUST_LOG_ERR(...) ::debug::Log::PrintError("[err] " __VA_ARGS__)
+#define DUST_LOG_OK(...)  ::debug::Log::PrintOk("[ok] " __VA_ARGS__)
+#define DUST_LOG_WRN(...) ::debug::Log::PrintWarning("[wrn] " __VA_ARGS__)
 
 #else
 

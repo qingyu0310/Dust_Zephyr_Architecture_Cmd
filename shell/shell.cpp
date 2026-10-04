@@ -37,13 +37,13 @@ bool Shell::Init(Stream &stream)
  */
 void Shell::CmdHelp() const
 {
-    Log::SendLine("var list                列出所有调试变量");
-    Log::SendLine("var get <name>          查看变量");
-    Log::SendLine("var set <name> <val>    修改变量");
-    Log::SendLine("log list                列出所有日志条目（含选中状态）");
-    Log::SendLine("log on <name>           选中某条日志流式打印（同一时间只打一条）");
-    Log::SendLine("log off                 停止打印");
-    Log::SendLine("h/?                     帮助");
+    Log::SendCommandLine("var list                列出所有调试变量");
+    Log::SendCommandLine("var get <name>          查看变量");
+    Log::SendCommandLine("var set <name> <val>    修改变量");
+    Log::SendCommandLine("log list                列出所有日志条目（含选中状态）");
+    Log::SendCommandLine("log on <name>           选中某条日志流式打印（同一时间只打一条）");
+    Log::SendCommandLine("log off                 停止打印");
+    Log::SendCommandLine("h/?                     帮助");
 }
 
 /**
@@ -67,7 +67,7 @@ void Shell::ProcessLine(uint8_t *line)
     }
     else if (std::strcmp(reinterpret_cast<const char*>(cmd), "log") == 0)
     {
-        Log::Process(line);          // log list/on/off —— 实现在 log.cpp
+        Log::ProcessLogCommand(line);          // log list/on/off —— 实现在 log.cpp
     }
     else if (std::strcmp(reinterpret_cast<const char*>(cmd), "h") == 0 || std::strcmp(reinterpret_cast<const char*>(cmd), "?") == 0)
     {
@@ -75,7 +75,7 @@ void Shell::ProcessLine(uint8_t *line)
     }
     else
     {
-        Log::SendLine("?: var/log/h");
+        Log::SendCommandLine("?: var/log/h");
     }
 }
 
@@ -88,11 +88,11 @@ void Shell::Task()
     {
         k_sem_take(&stream_->sem_, K_FOREVER);   		 			// 通道事件：接收数据 OR 日志发送需要驱动
 
-        Log::PumpSend();                          								 // 先驱动日志发送（DMA 空闲则续发）
+        Log::SendNextFrameIfIdle();                          								 // 先驱动日志发送（DMA 空闲则续发）
 
-        while (Log::ProcessOneRecord())    										 // 出队参数快照请求 → 展开入帧池 → 泵
+        while (Log::FormatOnePendingRecord())    										 // 出队参数快照请求 → 展开入帧池 → 泵
         {
-            Log::PumpSend();
+            Log::SendNextFrameIfIdle();
         }
 
         uint8_t buf[32];
@@ -133,7 +133,7 @@ static Shell shell_;
 /**
  * @brief 初始化 console UART 和 dbg 控制台
  *
- * UartDma 的 tx_cb 注册 Log::OnTxDone（发送完成回调，仲裁器补发挂起帧），
+ * UartDma 的 tx_cb 注册 Log::HandleTxDone（发送完成回调，仲裁器补发挂起帧），
  * 随后初始化 rx、接入 Shell、初始化并绑定 DUST_LOG 发送通道。
  *
  * @return true 初始化成功
@@ -144,14 +144,14 @@ static bool thread_init()
 
     UartDma::Config cfg;
     cfg.line_cfg.baudrate = 921600;
-    cfg.base_cfg.tx_cb    = Log::OnTxDone;
+    cfg.base_cfg.tx_cb    = Log::HandleTxDone;
 
     if (!rx.Init(DEVICE_DT_GET(DT_ALIAS(shell_uart)), cfg)) return false;
 
     if (!shell_.Init(rx)) return false;
 
 	Log::Init();
-    Log::BindStream(&rx);
+    Log::BindOutputStream(&rx);
 
 	DUST_LOG_INF("shell init");
 
@@ -165,7 +165,7 @@ static bool thread_init()
 static bool thread_start()
 {
     shell_.Start();
-	Log::SetShellOwn();                       									// 首次运行即接管发送（重复置 true 无害）
+	Log::MarkShellThreadReady();                       									// 首次运行即接管发送（重复置 true 无害）
 	DUST_LOG_INF("shell send owner taken"); 									// 发送模式切换：调用点直发 → shell 线程驱动
     return true;
 }

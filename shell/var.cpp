@@ -64,7 +64,7 @@ void Var::PrintVar(const Entry &e)
         case VarType::Bool:    snprintf(line, sizeof(line), "  %s (bool)  = %s",   e.name, *static_cast<const bool*>(e.ptr) ? "true" : "false");      break;
     }
 
-    Log::SendLine(line);
+    Log::SendCommandLine(line);
 }
 
 /**
@@ -90,7 +90,7 @@ void Var::PrintValueOnly(const Entry &e)
         case VarType::Bool:    snprintf(line, sizeof(line), "%s = %s",   e.name, *static_cast<const bool*>(e.ptr) ? "true" : "false");      break;
     }
 
-    Log::SendLine(line);
+    Log::SendCommandLine(line);
 }
 
 /**
@@ -100,7 +100,7 @@ void Var::CmdList()
 {
     size_t n = __shell_var_end - __shell_var_start;
 
-    if (n == 0) { Log::SendLine("(none)"); return; }
+    if (n == 0) { Log::SendCommandLine("(none)"); return; }
 
     for (size_t i = 0; i < n; i++)
     {
@@ -109,7 +109,7 @@ void Var::CmdList()
 
     char line[160];
     snprintf(line, sizeof(line), "--- %zu variables ---", n);
-    Log::SendLine(line);
+    Log::SendCommandLine(line);
 }
 
 /**
@@ -124,7 +124,7 @@ void Var::CmdGet(const char *name)
     {
         char line[128];
         snprintf(line, sizeof(line), "not found: %s", name);
-        Log::SendLine(line);
+        Log::SendCommandLine(line);
         return;
     }
 
@@ -144,7 +144,7 @@ void Var::CmdSet(const char *name, const char *val)
     {
         char line[128];
         snprintf(line, sizeof(line), "not found: %s", name);
-        Log::SendLine(line);
+        Log::SendCommandLine(line);
         return;
     }
 
@@ -157,7 +157,7 @@ void Var::CmdSet(const char *name, const char *val)
         {
             char *end = nullptr;
             unsigned long long v = std::strtoull(val, &end, 0);
-            if (*end != '\0') { Log::SendLine("bad value"); return; }
+            if (*end != '\0') { Log::SendCommandLine("bad value"); return; }
             switch (e->type)
             {
                 case VarType::Uint8:   *static_cast<uint8_t*> (e->ptr) = static_cast<uint8_t> (v); break;
@@ -175,7 +175,7 @@ void Var::CmdSet(const char *name, const char *val)
         {
             char *end = nullptr;
             long long v = std::strtoll(val, &end, 0);
-            if (*end != '\0') { Log::SendLine("bad value"); return; }
+            if (*end != '\0') { Log::SendCommandLine("bad value"); return; }
             switch (e->type)
             {
                 case VarType::Int8:   *static_cast<int8_t*> (e->ptr) = static_cast<int8_t> (v); break;
@@ -190,7 +190,7 @@ void Var::CmdSet(const char *name, const char *val)
         {
             char *end = nullptr;
             float v = std::strtof(val, &end);
-            if (*end != '\0') { Log::SendLine("bad value"); return; }
+            if (*end != '\0') { Log::SendCommandLine("bad value"); return; }
             *static_cast<float*>(e->ptr) = v;
             break;
         }
@@ -198,7 +198,7 @@ void Var::CmdSet(const char *name, const char *val)
         {
             char *end = nullptr;
             double v = std::strtod(val, &end);
-            if (*end != '\0') { Log::SendLine("bad value"); return; }
+            if (*end != '\0') { Log::SendCommandLine("bad value"); return; }
             *static_cast<double*>(e->ptr) = v;
             break;
         }
@@ -209,13 +209,13 @@ void Var::CmdSet(const char *name, const char *val)
                 v = true;
             else if (std::strcmp(val, "false") == 0 || std::strcmp(val, "0") == 0)
                 v = false;
-            else { Log::SendLine("bad value"); return; }
+            else { Log::SendCommandLine("bad value"); return; }
             *static_cast<bool*>(e->ptr) = v;
             break;
         }
     }
 
-    Log::SendLine("ok");
+    Log::SendCommandLine("ok");
 }
 
 /**
@@ -245,10 +245,10 @@ void Var::Process(uint8_t *line)
         uint8_t *val  = nullptr;
         while (*line && *line != ' ') line++;
         if (*line == ' ') { *line = '\0'; line++; while (*line == ' ') line++; val = line; }
-        if (val == nullptr || *val == '\0') Log::SendLine("usage: var set <name> <value>");
+        if (val == nullptr || *val == '\0') Log::SendCommandLine("usage: var set <name> <value>");
         else CmdSet(reinterpret_cast<const char*>(name), reinterpret_cast<const char*>(val));
     }
-    else Log::SendLine("?: var list|get <name>|set <name> <val>");
+    else Log::SendCommandLine("?: var list|get <name>|set <name> <val>");
 }
 
 } // namespace debug
