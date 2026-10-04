@@ -119,7 +119,7 @@ public:
         irq_unlock(key);
     }
 
-    static void PrintSelectedDebug(LogEntry* e, const char* fmt, ...);			// DBG 流式打印（仅 e==active_ 才发，薄荷绿）
+    static void PrintSelectedDebug(LogEntry* e, const char* fmt, ...);			// DBG 流式打印（仅 e==active_ 才发，纯文本无 ANSI，兼容 VOFA+ FireWater）
     static void PrintInfo(const char* fmt, ...);								// 一次性，黑色
     static void PrintError(const char* fmt, ...);								// 一次性，红色
     static void PrintOk(const char* fmt, ...);									// 一次性，绿色

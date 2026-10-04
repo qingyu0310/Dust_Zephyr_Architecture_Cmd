@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file log.cpp
  * @author qingyu
  * @brief DUST_LOG 自研日志系统实现 — 帧池三档优先级仲裁发送
@@ -89,7 +89,7 @@ bool Log::SelectDebugEntry(const char* name)
 }
 
 /**
- * @brief DBG 流式打印（仅当 e 是当前选中条目才发，薄荷绿，低优先级）
+ * @brief DBG 流式打印（仅当 e 是当前选中条目才发，纯文本无 ANSI，兼容 VOFA+ FireWater，低优先级）
  *
  * 分时段：同步段调用点 vsnprintf + 直发；异步段参数快照入队，shell 线程 FormatRecordToFrame。
  *
@@ -106,7 +106,7 @@ void Log::PrintSelectedDebug(LogEntry* e, const char* fmt, ...)
     va_list ap;
     va_start(ap, fmt);
 
-    // 异步段（shell 接管后）：参数快照（DBG 薄荷绿）
+    // 异步段（shell 接管后）：参数快照（DBG 纯文本）
     uint32_t args[kMaxLogArgs];
     uint8_t  nargs = 0;
     CopyFormatArgs(fmt, ap, args, &nargs);
@@ -411,10 +411,17 @@ void Log::FormatRecordToFrame(LogRecord* r)
     }
     buf[pos] = '\0';
 
-    // ANSI 上色 + \r\n（复用 PrintColoredLog 组装）
+    // Dbg 档：纯文本 + \r\n，不上 ANSI 颜色 —— 兼容 VOFA+ FireWater
+    //（ANSI 转义串 \x1b[38;2;R;G;Bm 里的数字会被 VOFA+ 误解析成通道数据）
     char out[kLogBufSize + kColorOutExtra];
-    const uint32_t rgb = static_cast<uint32_t>(r->color);
-    int n = snprintf(out, sizeof(out), "\x1b[38;2;%d;%d;%dm%s\x1b[0m\r\n", (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, buf);
+    int n;
+    if (r->prio == TxPriority::Dbg) {
+        n = snprintf(out, sizeof(out), "%s\r\n", buf);
+    }
+    else {
+        const uint32_t rgb = static_cast<uint32_t>(r->color);
+        n = snprintf(out, sizeof(out), "\x1b[38;2;%d;%d;%dm%s\x1b[0m\r\n", (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, buf);
+    }
 
     if (n > 0) QueueFrameForShellSend(out, n, r->prio);             // 线程展开后按原始请求档位入队
 }
