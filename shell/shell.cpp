@@ -43,6 +43,7 @@ void Shell::CmdHelp() const
     Log::SendCommandLine("log list                列出所有日志条目（含选中状态）");
     Log::SendCommandLine("log on <name>           选中某条日志流式打印（同一时间只打一条）");
     Log::SendCommandLine("log off                 停止打印");
+    Log::SendCommandLine("log mode <name> on|off  切换输出模式（on=VOFA+纯文本，off=上色）");
     Log::SendCommandLine("h/?                     帮助");
 }
 

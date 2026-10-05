@@ -59,9 +59,9 @@ void Var::PrintVar(const Entry &e)
         case VarType::Int32:   snprintf(line, sizeof(line), "  %s (i32)   = %d",   e.name, *static_cast<const int32_t*>(e.ptr));   break;
         case VarType::Uint64:  snprintf(line, sizeof(line), "  %s (u64)   = %llu", e.name, *static_cast<const uint64_t*>(e.ptr));  break;
         case VarType::Int64:   snprintf(line, sizeof(line), "  %s (i64)   = %lld", e.name, *static_cast<const int64_t*>(e.ptr));   break;
-        case VarType::Float:   snprintf(line, sizeof(line), "  %s (float) = %f",   e.name, static_cast<double>(*static_cast<const float*>(e.ptr)));   break;
+        case VarType::Float:   snprintf(line, sizeof(line), "  %s (float) = %f",   e.name,  static_cast<double>(*static_cast<const float*>(e.ptr)));   break;
         case VarType::Double:  snprintf(line, sizeof(line), "  %s (double)= %lf",  e.name, *static_cast<const double*>(e.ptr));    break;
-        case VarType::Bool:    snprintf(line, sizeof(line), "  %s (bool)  = %s",   e.name, *static_cast<const bool*>(e.ptr) ? "true" : "false");      break;
+        case VarType::Bool:    snprintf(line, sizeof(line), "  %s (bool)  = %s",   e.name, *static_cast<const bool*>(e.ptr) ? "true" : "false");       break;
     }
 
     Log::SendCommandLine(line);
@@ -85,9 +85,9 @@ void Var::PrintValueOnly(const Entry &e)
         case VarType::Int32:   snprintf(line, sizeof(line), "%s = %d",   e.name, *static_cast<const int32_t*>(e.ptr));   break;
         case VarType::Uint64:  snprintf(line, sizeof(line), "%s = %llu", e.name, *static_cast<const uint64_t*>(e.ptr));  break;
         case VarType::Int64:   snprintf(line, sizeof(line), "%s = %lld", e.name, *static_cast<const int64_t*>(e.ptr));   break;
-        case VarType::Float:   snprintf(line, sizeof(line), "%s = %f",   e.name, static_cast<double>(*static_cast<const float*>(e.ptr)));   break;
+        case VarType::Float:   snprintf(line, sizeof(line), "%s = %f",   e.name,  static_cast<double>(*static_cast<const float*>(e.ptr)));   break;
         case VarType::Double:  snprintf(line, sizeof(line), "%s = %lf",  e.name, *static_cast<const double*>(e.ptr));    break;
-        case VarType::Bool:    snprintf(line, sizeof(line), "%s = %s",   e.name, *static_cast<const bool*>(e.ptr) ? "true" : "false");      break;
+        case VarType::Bool:    snprintf(line, sizeof(line), "%s = %s",   e.name, *static_cast<const bool*>(e.ptr) ? "true" : "false");       break;
     }
 
     Log::SendCommandLine(line);
