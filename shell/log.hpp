@@ -80,16 +80,16 @@ public:
 
 private:
     static inline DebugSourceRegistry dbg_ {};           											// DBG 源注册表（名字/选中/遍历）
-    static inline LogTransport      pump_ {};            											// 发送泵（通道/发送中标志/续发）
-    static inline bool      shell_own_  = false;         											// shell 线程已接管发送（Task 首行置 true，boot 早期为 false 直发）
+    static inline LogTransport pump_ {};            												// 发送泵（通道/发送中标志/续发）
+    static inline bool shell_own_  = false;         												// shell 线程已接管发送（Task 首行置 true，boot 早期为 false 直发）
 
     static inline TxFrameQueue   txq_   {};             											// 发送帧池 + 三档优先级队列
     static inline LogRecordQueue recq_  {};             											// 原始请求池 + FIFO 队列
 
-    static void PrintColoredLog(LogChannel channel, const char* fmt, va_list ap);												// 通用：按通道策略上色 + 仲裁发送
+    static void PrintColoredLog(LogChannel channel, const char* fmt, va_list ap);														// 通用：按通道策略上色 + 仲裁发送
     static void QueueLogRecord(const char* fmt, LogChannel channel, uint16_t epoch, bool ansi, const uint32_t* args, uint8_t nargs);	// 入队原始请求（异步段调用点）
-	static void QueueFrameAndSendNow(const char* data, int len, TxPriority prio, uint16_t epoch);								// 直发原语：入帧池+立即发（命令响应/boot 日志）
-	static void QueueFrameForShellSend(const char* data, int len, TxPriority prio, uint16_t epoch);								// 异步原语：入帧池+give（shell 线程 FormatRecordToText 后）
+	static void QueueFrameAndSendNow(const char* data, int len, TxPriority prio, uint16_t epoch);										// 直发原语：入帧池+立即发（命令响应/boot 日志）
+	static void QueueFrameForShellSend(const char* data, int len, TxPriority prio, uint16_t epoch);										// 异步原语：入帧池+give（shell 线程 FormatRecordToText 后）
 };
 
 } // namespace debug

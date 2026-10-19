@@ -28,7 +28,7 @@ namespace debug {
 class LogTransport
 {
 public:
-    void    Reset() { sending_ = false; }              	// 清「发送中」标志（初始化）
+    void    Reset()		 	{ sending_ = false; }       // 清「发送中」标志（初始化）
     void    Bind(Stream* s) { stream_ = s; }           	// 绑定发送通道
     bool    Sending() const { return sending_; }       	// 当前是否有帧在 DMA 中
     Stream* Channel() const { return stream_; }        	// 发送通道（唤醒 shell 泵用）

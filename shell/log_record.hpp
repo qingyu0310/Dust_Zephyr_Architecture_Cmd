@@ -155,7 +155,7 @@ inline size_t FormatRecordToText(const LogRecord& r, char* text, size_t text_siz
         if (spec != '\0') fmt++;
 
         size_t room = text_size - pos;
-        if (room < 8) break;                          // 剩太少，截断
+        if (room < 8) break;                          			// 剩太少，截断
 
         switch (spec)
         {
@@ -169,9 +169,9 @@ inline size_t FormatRecordToText(const LogRecord& r, char* text, size_t text_siz
             case 'f': case 'F':
             {
                 double d = 0.0;
-                if (k + 1 < r.nargs)
+                if (k + 1 < r.nargs)	
                 {
-                    std::memcpy(&d, &r.args[k], sizeof(d));   // 2 槽拼回（little-endian）
+                    std::memcpy(&d, &r.args[k], sizeof(d));   	// 2 槽拼回（little-endian）
                     k += 2;
                 }
                 else { k = r.nargs; }
