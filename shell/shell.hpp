@@ -40,10 +40,10 @@ public:
 private:
     static constexpr size_t kLineBufSize = 128;
 
-    Stream            *stream_   = nullptr;
-    uint8_t            line_buf_[kLineBufSize]{};
-    uint32_t           line_pos_ = 0;
-    Thread<2048>       thread_   {};
+    Stream       *stream_   = nullptr;
+    uint8_t       line_buf_[kLineBufSize]{};
+    uint32_t      line_pos_ = 0;
+    Thread<2048>  thread_   {};
 
     void CmdHelp() const;
     void ProcessLine(uint8_t *line);
