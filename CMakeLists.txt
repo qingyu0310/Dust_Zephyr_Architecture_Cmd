@@ -3,6 +3,7 @@
 # shell 底座 + 子命令：log/var/thread 各自目录
 target_include_directories(app PRIVATE
     shell
+    shell/boot
     shell/log
     shell/var
     shell/thread
@@ -11,6 +12,7 @@ target_include_directories(app PRIVATE
 if(CONFIG_DUST_CMD_SHELL)
     target_sources(app PRIVATE
         shell/shell.cpp
+        shell/boot/boot_cmd.cpp
         shell/thread/thread_cmd.cpp
     )
 endif()

@@ -2,7 +2,7 @@
  * @file shell.cpp
  * @author qingyu
  * @brief 自维护 UART 线程底座 — 命令分发 + 初始化接入 DUST_LOG
- * @version 0.3
+ * @version 0.4
  * @date 2026-10-19
  *
  * @copyright Copyright (c) 2026
@@ -12,6 +12,7 @@
 #include "shell.hpp"
 #include "var.hpp"
 #include "log.hpp"
+#include "boot_cmd.hpp"
 #include "thread_cmd.hpp"
 #include "Init_entry.hpp"
 #include <cstring>
@@ -50,6 +51,7 @@ void Shell::CmdHelp() const
     Log::SendCommandLine("thread pause <name>     暂停线程（保留现场）");
     Log::SendCommandLine("thread resume <name>    恢复被暂停的线程");
     Log::SendCommandLine("thread reset <name>     清零线程计数器");
+    Log::SendCommandLine("boot timing             启动期各项耗时");
     Log::SendCommandLine("h/?                     帮助");
 }
 
@@ -80,13 +82,17 @@ void Shell::ProcessLine(uint8_t *line)
     {
         ThreadCmd::Process(line);              // thread list/show/pause/resume/reset
     }
+    else if (std::strcmp(reinterpret_cast<const char*>(cmd), "boot") == 0)
+    {
+        BootCmd::Process(line);                // boot timing
+    }
     else if (std::strcmp(reinterpret_cast<const char*>(cmd), "h") == 0 || std::strcmp(reinterpret_cast<const char*>(cmd), "?") == 0)
     {
         CmdHelp();
     }
     else
     {
-        Log::SendCommandLine("?: var/log/thread/h");
+        Log::SendCommandLine("?: var/log/thread/boot/h");
     }
 }
 
@@ -182,6 +188,6 @@ static bool thread_start()
 }
 
 REGISTER_INIT  (thread_init,  PreInit, High, HaltOnFail, nullptr, "dbg_init");
-REGISTER_THREAD(thread_start, PreThread, "dbg_start");
+REGISTER_THREAD(thread_start, PreThread, HaltOnFail, "dbg_start");
 
 } // namespace debug

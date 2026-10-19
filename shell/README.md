@@ -24,9 +24,10 @@
 ```text
 shell/
 ├── shell.hpp / shell.cpp       底座：UART 线程 + 命令分发 + 日志发送驱动
+├── boot/                       boot 命令（启动期耗时查询）
 ├── log/                        日志子系统（门面 + 策略 + 队列 + 发送泵）
 ├── var/                        调试变量（链接段收集 + var 命令）
-└── thread/                     thread 命令（线程运行统计查看）
+└── thread/                     thread 命令（线程运行统计与暂停/恢复）
 ```
 
 | 模块 | 文件 | 职责 | Kconfig 符号 |
@@ -34,6 +35,7 @@ shell/
 | log | [log/](log/) 见下方分层表 | 日志门面 + 通道策略 + DBG 源注册 + 记录/格式化 + 队列/仲裁 + 发送泵 | `DUST_CMD_SHELL_LOG` |
 | var | [var/var.hpp](var/var.hpp) / [var/var.cpp](var/var.cpp) | 调试变量注册（`.shell_var` 链接段收集）+ var list/get/set | `DUST_CMD_SHELL_VAR` |
 | thread | [thread/thread_cmd.hpp](thread/thread_cmd.hpp) / [thread/thread_cmd.cpp](thread/thread_cmd.cpp) | `thread list/show/pause/resume/reset`，遍历 `thread_registry` 输出运行统计与控制线程 | `DUST_CMD_SHELL` |
+| boot | [boot/boot_cmd.hpp](boot/boot_cmd.hpp) / [boot/boot_cmd.cpp](boot/boot_cmd.cpp) | `boot timing`，遍历 `.boot_timing` 段输出启动期各项耗时 | `DUST_CMD_SHELL` |
 | shell | [shell.hpp](shell.hpp) / [shell.cpp](shell.cpp) | UART 线程底座（接收循环 + 命令分发 + 日志发送驱动）+ 初始化接入 | `DUST_CMD_SHELL` |
 
 **log 分层（全部头文件内联实现，只有一个 .cpp）**：
@@ -329,7 +331,7 @@ DUST_LOG_DBG("name", ...)
 
 ### 3.6 分时段同步异步发送（核心机制）
 
-**背景**：shell 线程在 `PreThread` 阶段才启动（[shell.cpp](shell.cpp) `REGISTER_THREAD(thread_start, PreThread, ...)`）。boot 早期 shell 线程还没跑，若调用点只入队会无人消费（帧积压满后吞日志）。所以用 `shell_own_` 标志划分两个时段：
+**背景**：shell 线程在 `PreThread` 阶段才启动（[shell.cpp](shell.cpp) `REGISTER_THREAD(thread_start, PreThread, HaltOnFail, ...)`）。boot 早期 shell 线程还没跑，若调用点只入队会无人消费（帧积压满后吞日志）。所以用 `shell_own_` 标志划分两个时段：
 
 | 时段 | `shell_own_` | 调用点行为 | 实时要求 |
 |------|-------------|-----------|---------|
@@ -640,7 +642,7 @@ void Shell::Task()
 
 ```
 REGISTER_INIT  (thread_init,  PreInit, High, HaltOnFail, nullptr, "dbg_init")  ← PreInit 初始化 uart3 + Log
-REGISTER_THREAD(thread_start, PreThread, "dbg_start")                          ← PreThread 启动 shell 线程
+REGISTER_THREAD(thread_start, PreThread, HaltOnFail, "dbg_start")              ← PreThread 启动 shell 线程
 ```
 
 `thread_init` 用 `DT_ALIAS(shell_uart)`（overlay 配 `shell-uart = &uart3`），注册 `tx_cb = Log::HandleTxDone` → `Log::Init()` → `Log::BindOutputStream(&rx)`。
@@ -651,7 +653,7 @@ REGISTER_THREAD(thread_start, PreThread, "dbg_start")                          �
 
 | 命令 | 输出 |
 |------|------|
-| `h` / `?` | 帮助 13 行 |
+| `h` / `?` | 帮助 14 行 |
 | `var list` | 每个变量一行 `名字 (类型) = 值` + `--- N variables ---` |
 | `var get <name>` | `名字 = 值`；`not found: <name>` |
 | `var set <name> <val>` | `ok`；坏值 `bad value`；缺值 `usage: var set <name> <value>` |
@@ -665,6 +667,7 @@ REGISTER_THREAD(thread_start, PreThread, "dbg_start")                          �
 | `thread pause <name>` | `thread pause: ok`；不存在 `thread pause: not found` |
 | `thread resume <name>` | `thread resume: ok`；不存在 `thread resume: not found` |
 | `thread reset <name>` | `thread reset: ok`；不存在 `thread reset: not found` |
+| `boot timing` | `BOOT TIMING (total N ms, M items)` + 按耗时降序的项列表；无记录 `(no boot timing recorded)` |
 
 ---
 
