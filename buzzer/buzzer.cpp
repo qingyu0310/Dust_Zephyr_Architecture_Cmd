@@ -126,8 +126,8 @@ static bool buzzer_init()
 {
     return buzzer::Instance().Init(PWM_DT_SPEC_GET(DT_NODELABEL(buzzer_pwm)));
 }
-REGISTER_INIT(buzzer_init, PreInit, Mid, HaltOnFail, "buzzer");
 
+REGISTER_INIT(buzzer_init, PreInit, Mid, HaltOnFail, "buzzer");
 
 } // namespace buzzer
 
