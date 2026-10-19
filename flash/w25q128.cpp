@@ -2,8 +2,8 @@
  * @file w25q128.cpp
  * @author qingyu
  * @brief W25Q128 SPI NOR Flash — 同步阻塞驱动
- * @version 0.1
- * @date 2026-07-26
+ * @version 0.2
+ * @date 2026-10-19
  *
  * @copyright Copyright (c) 2026
  *
@@ -454,6 +454,14 @@ static bool flash_init()
     return w25q128::Instance().Init();
 }
 
-REGISTER_INIT(flash_init, PreInit, Mid, HaltOnFail, "w25q128");
+/**
+ * @brief 让 Flash 进入掉电模式，可重复调用
+ */
+static void flash_deinit()
+{
+    (void)w25q128::Instance().PowerDown();
+}
+
+REGISTER_INIT(flash_init, PreInit, Mid, HaltOnFail, flash_deinit, "w25q128");
 
 } // namespace w25q128

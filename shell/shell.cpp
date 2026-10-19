@@ -2,8 +2,8 @@
  * @file shell.cpp
  * @author qingyu
  * @brief 自维护 UART 线程底座 — 命令分发 + 初始化接入 DUST_LOG
- * @version 0.2
- * @date 2026-08-06
+ * @version 0.3
+ * @date 2026-10-19
  *
  * @copyright Copyright (c) 2026
  *
@@ -12,6 +12,7 @@
 #include "shell.hpp"
 #include "var.hpp"
 #include "log.hpp"
+#include "thread_cmd.hpp"
 #include "Init_entry.hpp"
 #include <cstring>
 #include "uart.hpp"
@@ -44,6 +45,11 @@ void Shell::CmdHelp() const
     Log::SendCommandLine("log on <name>           选中某条日志流式打印（同一时间只打一条）");
     Log::SendCommandLine("log off                 停止打印");
     Log::SendCommandLine("log mode <name> on|off  切换输出模式（on=VOFA+纯文本，off=上色）");
+    Log::SendCommandLine("thread list             列出所有线程运行统计");
+    Log::SendCommandLine("thread show <name>      查看单线程详细统计");
+    Log::SendCommandLine("thread pause <name>     暂停线程（保留现场）");
+    Log::SendCommandLine("thread resume <name>    恢复被暂停的线程");
+    Log::SendCommandLine("thread reset <name>     清零线程计数器");
     Log::SendCommandLine("h/?                     帮助");
 }
 
@@ -64,11 +70,15 @@ void Shell::ProcessLine(uint8_t *line)
 
     if (std::strcmp(reinterpret_cast<const char*>(cmd), "var") == 0)
     {
-        Var::Process(line);          // var list/get/set —— 实现在 var.cpp
+        Var::Process(line);          			// var list/get/set —— 实现在 var.cpp
     }
     else if (std::strcmp(reinterpret_cast<const char*>(cmd), "log") == 0)
     {
         Log::ProcessLogCommand(line);          // log list/on/off —— 实现在 log.cpp
+    }
+    else if (std::strcmp(reinterpret_cast<const char*>(cmd), "thread") == 0)
+    {
+        ThreadCmd::Process(line);              // thread list/show/pause/resume/reset
     }
     else if (std::strcmp(reinterpret_cast<const char*>(cmd), "h") == 0 || std::strcmp(reinterpret_cast<const char*>(cmd), "?") == 0)
     {
@@ -76,7 +86,7 @@ void Shell::ProcessLine(uint8_t *line)
     }
     else
     {
-        Log::SendCommandLine("?: var/log/h");
+        Log::SendCommandLine("?: var/log/thread/h");
     }
 }
 
@@ -171,7 +181,7 @@ static bool thread_start()
     return true;
 }
 
-REGISTER_INIT  (thread_init,  PreInit, High, HaltOnFail, "dbg_init");
+REGISTER_INIT  (thread_init,  PreInit, High, HaltOnFail, nullptr, "dbg_init");
 REGISTER_THREAD(thread_start, PreThread, "dbg_start");
 
 } // namespace debug

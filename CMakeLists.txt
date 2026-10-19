@@ -1,12 +1,24 @@
-target_include_directories(app PRIVATE shell)
+# cmd 层：shell（连接底座 + 子命令分层）/ buzzer / flash / fatal
+
+# shell 底座 + 子命令：log/var/thread 各自目录
+target_include_directories(app PRIVATE
+    shell
+    shell/log
+    shell/var
+    shell/thread
+)
+
 if(CONFIG_DUST_CMD_SHELL)
-    target_sources(app PRIVATE shell/shell.cpp)
+    target_sources(app PRIVATE
+        shell/shell.cpp
+        shell/thread/thread_cmd.cpp
+    )
 endif()
 if(CONFIG_DUST_CMD_SHELL_VAR)
-    target_sources(app PRIVATE shell/var.cpp)
+    target_sources(app PRIVATE shell/var/var.cpp)
 endif()
 if(CONFIG_DUST_CMD_SHELL_LOG)
-    target_sources(app PRIVATE shell/log.cpp)
+    target_sources(app PRIVATE shell/log/log.cpp)
 endif()
 
 target_include_directories(app PRIVATE buzzer)

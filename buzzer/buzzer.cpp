@@ -2,8 +2,8 @@
  * @file buzzer.cpp
  * @author qingyu
  * @brief 蜂鸣器控制 — PWM 发声
- * @version 0.1
- * @date 2026-07-25
+ * @version 0.2
+ * @date 2026-10-19
  *
  * @copyright Copyright (c) 2026
  *
@@ -127,7 +127,15 @@ static bool buzzer_init()
     return buzzer::Instance().Init(PWM_DT_SPEC_GET(DT_NODELABEL(buzzer_pwm)));
 }
 
-REGISTER_INIT(buzzer_init, PreInit, Mid, HaltOnFail, "buzzer");
+/**
+ * @brief 关闭蜂鸣器输出
+ */
+static void buzzer_deinit()
+{
+    (void)buzzer::Instance().Off();
+}
+
+REGISTER_INIT(buzzer_init, PreInit, Mid, HaltOnFail, buzzer_deinit, "buzzer");
 
 } // namespace buzzer
 

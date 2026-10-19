@@ -2,8 +2,8 @@
  * @file shell.hpp
  * @author qingyu
  * @brief 自维护 UART 线程底座 — 接收循环 + 命令分发（var/log 子命令）
- * @version 0.2
- * @date 2026-08-06
+ * @version 0.3
+ * @date 2026-10-19
  *
  * @copyright Copyright (c) 2026
  *
@@ -36,6 +36,13 @@ public:
     {
         thread_.Start(TaskEntry, prio, this, "shell");
     }
+
+    /**
+     * @brief 暂停 / 恢复 / 查询暂停状态（转发给底层线程）
+     */
+    void Pause()  { thread_.Pause(); }
+    void Resume() { thread_.Resume(); }
+    bool Paused() const { return thread_.Paused(); }
 
 private:
     static constexpr size_t kLineBufSize = 128;

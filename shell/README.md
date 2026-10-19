@@ -21,23 +21,32 @@
 
 ## 1. 模块总览
 
+```text
+shell/
+├── shell.hpp / shell.cpp       底座：UART 线程 + 命令分发 + 日志发送驱动
+├── log/                        日志子系统（门面 + 策略 + 队列 + 发送泵）
+├── var/                        调试变量（链接段收集 + var 命令）
+└── thread/                     thread 命令（线程运行统计查看）
+```
+
 | 模块 | 文件 | 职责 | Kconfig 符号 |
 |------|------|------|-------------|
-| log | 见下方分层表 | 日志门面 + 通道策略 + DBG 源注册 + 记录/格式化 + 队列/仲裁 + 发送泵 | `DUST_CMD_SHELL_LOG` |
-| var | [var.hpp](var.hpp) / [var.cpp](var.cpp) | 调试变量注册（`.shell_var` 链接段收集）+ var list/get/set | `DUST_CMD_SHELL_VAR` |
+| log | [log/](log/) 见下方分层表 | 日志门面 + 通道策略 + DBG 源注册 + 记录/格式化 + 队列/仲裁 + 发送泵 | `DUST_CMD_SHELL_LOG` |
+| var | [var/var.hpp](var/var.hpp) / [var/var.cpp](var/var.cpp) | 调试变量注册（`.shell_var` 链接段收集）+ var list/get/set | `DUST_CMD_SHELL_VAR` |
+| thread | [thread/thread_cmd.hpp](thread/thread_cmd.hpp) / [thread/thread_cmd.cpp](thread/thread_cmd.cpp) | `thread list/show/pause/resume/reset`，遍历 `thread_registry` 输出运行统计与控制线程 | `DUST_CMD_SHELL` |
 | shell | [shell.hpp](shell.hpp) / [shell.cpp](shell.cpp) | UART 线程底座（接收循环 + 命令分发 + 日志发送驱动）+ 初始化接入 | `DUST_CMD_SHELL` |
 
 **log 分层（全部头文件内联实现，只有一个 .cpp）**：
 
 | 文件 | 层 | 内容 |
 |------|----|------|
-| [log.hpp](log.hpp) | 门面 | `Log` 类 + `DUST_LOG_*` 宏族 |
-| [log_policy.hpp](log_policy.hpp) | 策略 | `LogColor` / `TxPriority` / `LogChannel` + `LogChannelPolicy` / `TxPriorityPolicy` 表 |
-| [log_debug.hpp](log_debug.hpp) | DBG 源注册 | `LogEntry` + `DebugSourceRegistry`（名字/选中/选择代数/输出模式） |
-| [log_record.hpp](log_record.hpp) | 记录与格式化 | `LogRecord` + `BuildRecordFromVaList` / `FormatRecordToText` / `WrapOutputFrame` |
-| [log_queue.hpp](log_queue.hpp) | 队列与仲裁 | `TxFrame` + `LogRecordQueue` / `TxFrameQueue` |
-| [log_transport.hpp](log_transport.hpp) | 发送泵 | `LogTransport`（通道绑定 / DMA 空闲续发 / 发送完成回调） |
-| [log.cpp](log.cpp) | 门面实现 | `Log` 各入口实现 + `log` 命令解析 |
+| [log/log.hpp](log/log.hpp) | 门面 | `Log` 类 + `DUST_LOG_*` 宏族 |
+| [log/log_policy.hpp](log/log_policy.hpp) | 策略 | `LogColor` / `TxPriority` / `LogChannel` + `LogChannelPolicy` / `TxPriorityPolicy` 表 |
+| [log/log_debug.hpp](log/log_debug.hpp) | DBG 源注册 | `LogEntry` + `DebugSourceRegistry`（名字/选中/选择代数/输出模式） |
+| [log/log_record.hpp](log/log_record.hpp) | 记录与格式化 | `LogRecord` + `BuildRecordFromVaList` / `FormatRecordToText` / `WrapOutputFrame` |
+| [log/log_queue.hpp](log/log_queue.hpp) | 队列与仲裁 | `TxFrame` + `LogRecordQueue` / `TxFrameQueue` |
+| [log/log_transport.hpp](log/log_transport.hpp) | 发送泵 | `LogTransport`（通道绑定 / DMA 空闲续发 / 发送完成回调） |
+| [log/log.cpp](log/log.cpp) | 门面实现 | `Log` 各入口实现 + `log` 命令解析 |
 
 **依赖链**：
 
@@ -101,7 +110,7 @@ log mode <name> on|off  切换输出模式（on=VOFA+纯文本，off=上色，�
 
 ## 3. log 模块详解
 
-### 3.1 枚举与常量（[log_policy.hpp](log_policy.hpp)）
+### 3.1 枚举与常量（[log_policy.hpp](log/log_policy.hpp)）
 
 ```cpp
 // 颜色：TrueColor（24 位 RGB），输出 \x1b[38;2;R;G;Bm
@@ -173,16 +182,16 @@ inline constexpr TxPriorityPolicy kTxPriorityPolicies[] = {
 
 | 常量 | 值 | 定义处 | 含义 |
 |------|-----|--------|------|
-| `kLogBufSize` | 256 | [log_record.hpp](log_record.hpp) | 格式化缓冲：可变参数展开目标（超 255 截断） |
-| `kColorOutExtra` | 16 | [log_record.hpp](log_record.hpp) | 颜色输出缓冲额外预留（ANSI 转义 + `\r\n`） |
-| `kLineOutExtra` | 4 | [log_record.hpp](log_record.hpp) | 行输出缓冲额外预留（`\r\n`） |
-| `kMaxLogArgs` | 4 | [log_record.hpp](log_record.hpp) | 参数快照槽上限（`%f` 占 2 槽） |
-| `kMaxLogRecords` | 8 | [log_queue.hpp](log_queue.hpp) | LogRecord 原始请求队列深度 |
-| `kTxFrameSize` | 128 | [log_queue.hpp](log_queue.hpp) | 帧数据区大小（含尾部 `\0` 保险） |
-| `kTxMaxLen` | 127 | [log_queue.hpp](log_queue.hpp) | 发送最长字节长度，超长截断 |
-| `kTxPoolCount` | 8 | [log_queue.hpp](log_queue.hpp) | 帧池帧数（8 × 128B = 1KB） |
-| `kNullIndex` | 255 | [log_queue.hpp](log_queue.hpp) | 索引链表空值（255 = 无下一项） |
-| `kMaxLogEntries` | 64 | [log_debug.hpp](log_debug.hpp) | DBG 条目数上限 |
+| `kLogBufSize` | 256 | [log_record.hpp](log/log_record.hpp) | 格式化缓冲：可变参数展开目标（超 255 截断） |
+| `kColorOutExtra` | 16 | [log_record.hpp](log/log_record.hpp) | 颜色输出缓冲额外预留（ANSI 转义 + `\r\n`） |
+| `kLineOutExtra` | 4 | [log_record.hpp](log/log_record.hpp) | 行输出缓冲额外预留（`\r\n`） |
+| `kMaxLogArgs` | 4 | [log_record.hpp](log/log_record.hpp) | 参数快照槽上限（`%f` 占 2 槽） |
+| `kMaxLogRecords` | 8 | [log_queue.hpp](log/log_queue.hpp) | LogRecord 原始请求队列深度 |
+| `kTxFrameSize` | 128 | [log_queue.hpp](log/log_queue.hpp) | 帧数据区大小（含尾部 `\0` 保险） |
+| `kTxMaxLen` | 127 | [log_queue.hpp](log/log_queue.hpp) | 发送最长字节长度，超长截断 |
+| `kTxPoolCount` | 8 | [log_queue.hpp](log/log_queue.hpp) | 帧池帧数（8 × 128B = 1KB） |
+| `kNullIndex` | 255 | [log_queue.hpp](log/log_queue.hpp) | 索引链表空值（255 = 无下一项） |
+| `kMaxLogEntries` | 64 | [log_debug.hpp](log/log_debug.hpp) | DBG 条目数上限 |
 
 **每帧字节开销**（TrueColor 上色路径）：
 
@@ -223,7 +232,7 @@ struct LogRecord      // 日志原始请求（未格式化，异步段生产队�
 };
 ```
 
-`DebugSourceRegistry`（[log_debug.hpp](log_debug.hpp)）只管**名字与状态**，不感知队列/优先级/格式化：
+`DebugSourceRegistry`（[log_debug.hpp](log/log_debug.hpp)）只管**名字与状态**，不感知队列/优先级/格式化：
 
 ```cpp
 class DebugSourceRegistry
@@ -249,9 +258,9 @@ private:
 
 整个日志系统的队列全部是**静态数组 + 数组索引链表**（`uint8_t next` 存数组下标，`255`=空），运行期不 new/malloc。
 
-**① `TxFrameQueue`（[log_queue.hpp](log_queue.hpp)）**：内部维护 `frames/free_head/head/tail`，负责发送帧池、按档插队、池满挤帧、按 epoch 跳过作废 DBG 帧。
+**① `TxFrameQueue`（[log_queue.hpp](log/log_queue.hpp)）**：内部维护 `frames/free_head/head/tail`，负责发送帧池、按档插队、池满挤帧、按 epoch 跳过作废 DBG 帧。
 
-**② `LogRecordQueue`（[log_queue.hpp](log_queue.hpp)）**：内部维护 `records/free_head/head/tail`，负责异步段未格式化请求的 FIFO、池满丢弃、按 epoch 跳过作废 DBG 记录，以及格式化完成后的回收。
+**② `LogRecordQueue`（[log_queue.hpp](log/log_queue.hpp)）**：内部维护 `records/free_head/head/tail`，负责异步段未格式化请求的 FIFO、池满丢弃、按 epoch 跳过作废 DBG 记录，以及格式化完成后的回收。
 
 帧在 `TxFrameQueue` 内流转（分配→入队→发送→回收），`LogRecord` 在 `LogRecordQueue` 内流转（快照入队→shell 出队→格式化入帧池→回空闲）。静态池 + 索引链表 = 时间确定、无碎片；封装后 `Log` 只表达业务动作。
 
@@ -335,7 +344,7 @@ DUST_LOG_DBG("name", ...)
 
 #### TxFrameQueue：帧池 + 三档优先级队列
 
-真正的帧池分配、池满挤出、优先级插队都在 `TxFrameQueue` 内部完成（[log_queue.hpp](log_queue.hpp)）：
+真正的帧池分配、池满挤出、优先级插队都在 `TxFrameQueue` 内部完成（[log_queue.hpp](log/log_queue.hpp)）：
 
 ```cpp
 bool PushFrameLocked(const char* data, int len, TxPriority prio, uint16_t epoch, bool allow_evict);
@@ -357,7 +366,7 @@ bool PushFrameLocked(const char* data, int len, TxPriority prio, uint16_t epoch,
 - 优先挤 DBG，其次 Cmd（两者 `may_be_evicted = true`）。被挤掉的帧直接复用为新帧。
 - 新优先级只需改**策略表**，不用改这个函数。
 
-#### LogTransport：发送泵（[log_transport.hpp](log_transport.hpp)）
+#### LogTransport：发送泵（[log_transport.hpp](log/log_transport.hpp)）
 
 ```cpp
 class LogTransport
@@ -393,7 +402,7 @@ TxFrame*   PopNextFrameLocked(uint16_t active_epoch);    // 帧：同上
 - DBG 记录/帧在创建时携带当时的 epoch；出队时与 `dbg_.ActiveEpoch()` 不一致就丢弃。
 - 好处：DBG 控制层**不需要知道队列内部结构**，切换零遍历。代价是最多残留「已在 DMA 中的一帧」无法取消（可接受）。
 
-### 3.8 参数快照与格式化（[log_record.hpp](log_record.hpp)）
+### 3.8 参数快照与格式化（[log_record.hpp](log/log_record.hpp)）
 
 **目标**：异步段调用点（可能 ISR）连 vsnprintf 都不做，只把 `fmt + 参数值` 快照入队，格式化在 shell 线程。
 
@@ -508,7 +517,7 @@ log <其他>              "?: log list|on <name>|off|mode <name> on|off"
 
 ## 4. var 模块详解
 
-### 4.1 类型系统（[var.hpp](var.hpp)）
+### 4.1 类型系统（[var.hpp](var/var.hpp)）
 
 ```cpp
 enum class VarType : uint8_t { Uint8, Int8, Uint16, Int16, Uint32, Int32, Uint64, Int64, Float, Double, Bool };
@@ -544,7 +553,7 @@ struct Entry          // 链接段条目
 - `static_assert` 防止注册超大类型。
 - `CONFIG_DUST_CMD_SHELL_VAR=n` 时宏为空。
 
-### 4.3 命令实现（[var.cpp](var.cpp)）
+### 4.3 命令实现（[var.cpp](var/var.cpp)）
 
 | 函数 | 行为 |
 |------|------|
@@ -630,8 +639,8 @@ void Shell::Task()
 ### 5.4 初始化与注册
 
 ```
-REGISTER_INIT  (thread_init,  PreInit, High, HaltOnFail, "dbg_init")    ← PreInit 初始化 uart3 + Log
-REGISTER_THREAD(thread_start, PreThread, "dbg_start")                    ← PreThread 启动 shell 线程
+REGISTER_INIT  (thread_init,  PreInit, High, HaltOnFail, nullptr, "dbg_init")  ← PreInit 初始化 uart3 + Log
+REGISTER_THREAD(thread_start, PreThread, "dbg_start")                          ← PreThread 启动 shell 线程
 ```
 
 `thread_init` 用 `DT_ALIAS(shell_uart)`（overlay 配 `shell-uart = &uart3`），注册 `tx_cb = Log::HandleTxDone` → `Log::Init()` → `Log::BindOutputStream(&rx)`。
@@ -642,7 +651,7 @@ REGISTER_THREAD(thread_start, PreThread, "dbg_start")                    ← Pre
 
 | 命令 | 输出 |
 |------|------|
-| `h` / `?` | 帮助 8 行 |
+| `h` / `?` | 帮助 13 行 |
 | `var list` | 每个变量一行 `名字 (类型) = 值` + `--- N variables ---` |
 | `var get <name>` | `名字 = 值`；`not found: <name>` |
 | `var set <name> <val>` | `ok`；坏值 `bad value`；缺值 `usage: var set <name> <value>` |
@@ -651,6 +660,11 @@ REGISTER_THREAD(thread_start, PreThread, "dbg_start")                    ← Pre
 | `log off` | `log off: ok` |
 | `log mode <name> on` | `log mode: vofa`；不存在 `log mode: not found`；缺参 `?: log mode <name> on\|off` |
 | `log mode <name> off` | `log mode: color`；不存在 `log mode: not found` |
+| `thread list` | 每个线程一行 `名字 状态 RUN RETRY FATAL EXIT DROP STACK` + `--- N threads ---` |
+| `thread show <name>` | 多行：state / run / retry-fatal / exit / drop / last / max / total / stack |
+| `thread pause <name>` | `thread pause: ok`；不存在 `thread pause: not found` |
+| `thread resume <name>` | `thread resume: ok`；不存在 `thread resume: not found` |
+| `thread reset <name>` | `thread reset: ok`；不存在 `thread reset: not found` |
 
 ---
 
