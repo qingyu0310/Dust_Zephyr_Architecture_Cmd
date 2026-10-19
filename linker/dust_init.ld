@@ -60,3 +60,10 @@ SECTION_PROLOGUE(.shell_var,,)
     KEEP(*(.shell_var))
     __shell_var_end = .;
 } GROUP_LINK_IN(ROMABLE_REGION)
+
+SECTION_PROLOGUE(.shell_cmd,,)
+{
+    __shell_cmd_start = .;
+    KEEP(*(.shell_cmd))
+    __shell_cmd_end = .;
+} GROUP_LINK_IN(ROMABLE_REGION)

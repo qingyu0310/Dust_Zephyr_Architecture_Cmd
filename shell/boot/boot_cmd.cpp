@@ -2,7 +2,7 @@
  * @file boot_cmd.cpp
  * @author qingyu
  * @brief boot 命令实现 — 启动期耗时（输出走 DUST_LOG 命令响应）
- * @version 0.2
+ * @version 0.3
  * @date 2026-10-20
  *
  * @copyright Copyright (c) 2026
@@ -11,6 +11,8 @@
 
 #include "boot_cmd.hpp"
 #include "boot_timing.hpp"
+#include "shell_cmd.hpp"
+#include "token.hpp"
 #include "log.hpp"
 #include <cstdio>
 #include <cstring>
@@ -54,7 +56,7 @@ void BootCmd::CmdTiming()
     snprintf(head, sizeof(head), "BOOT TIMING (total %u ms, %u items)", (unsigned)total_ms, (unsigned)count);
     Log::SendCommandLine(head);
 
-    uint32_t used = 0;   // 位图：最多 32 项
+    uint32_t used = 0;   // 位图：已输出的槽
 
     for (uint8_t printed = 0; printed < count; ++printed)
     {
@@ -85,16 +87,16 @@ void BootCmd::CmdTiming()
  */
 void BootCmd::Process(uint8_t* line)
 {
-    while (*line == ' ') line++;
+    const char* sub = nullptr;
+    line = NextToken(line, sub);
 
-    if (std::strcmp(reinterpret_cast<const char*>(line), "timing") == 0)
-    {
+    if (std::strcmp(sub, "timing") == 0) {
         CmdTiming();
-    }
-    else
-    {
-        Log::SendCommandLine("?: boot timing");
+    } else {
+        Log::SendCommandLine("boot timing");
     }
 }
+
+REGISTER_SHELL_CMD("boot", "boot timing", BootCmd::Process, boot);
 
 } // namespace debug

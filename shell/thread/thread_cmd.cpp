@@ -2,8 +2,8 @@
  * @file thread_cmd.cpp
  * @author qingyu
  * @brief thread 命令实现 — list/show/pause/resume/reset（输出走 DUST_LOG 命令响应）
- * @version 0.2
- * @date 2026-10-19
+ * @version 0.3
+ * @date 2026-10-20
  *
  * @copyright Copyright (c) 2026
  *
@@ -11,6 +11,8 @@
 
 #include "thread_cmd.hpp"
 #include "thread_registry.hpp"
+#include "shell_cmd.hpp"
+#include "token.hpp"
 #include "log.hpp"
 #include <cstdio>
 #include <cstring>
@@ -67,6 +69,11 @@ void ThreadCmd::CmdList()
  */
 void ThreadCmd::CmdShow(const char* name)
 {
+    if (name == nullptr || *name == '\0') {
+        Log::SendCommandLine("usage: thread show <name>");
+        return;
+    }
+
     ThreadBase* t = thread_registry::Find(name);
     if (t == nullptr) {
         Log::SendCommandLine("thread show: not found");
@@ -121,6 +128,11 @@ void ThreadCmd::CmdShow(const char* name)
  */
 void ThreadCmd::CmdPause(const char* name)
 {
+    if (name == nullptr || *name == '\0') {
+        Log::SendCommandLine("usage: thread pause <name>");
+        return;
+    }
+
     ThreadBase* t = thread_registry::Find(name);
     if (t == nullptr) {
         Log::SendCommandLine("thread pause: not found");
@@ -137,6 +149,11 @@ void ThreadCmd::CmdPause(const char* name)
  */
 void ThreadCmd::CmdResume(const char* name)
 {
+    if (name == nullptr || *name == '\0') {
+        Log::SendCommandLine("usage: thread resume <name>");
+        return;
+    }
+
     ThreadBase* t = thread_registry::Find(name);
     if (t == nullptr) {
         Log::SendCommandLine("thread resume: not found");
@@ -153,6 +170,11 @@ void ThreadCmd::CmdResume(const char* name)
  */
 void ThreadCmd::CmdReset(const char* name)
 {
+    if (name == nullptr || *name == '\0') {
+        Log::SendCommandLine("usage: thread reset <name>");
+        return;
+    }
+
     ThreadBase* t = thread_registry::Find(name);
     if (t == nullptr) {
         Log::SendCommandLine("thread reset: not found");
@@ -169,38 +191,37 @@ void ThreadCmd::CmdReset(const char* name)
  */
 void ThreadCmd::Process(uint8_t* line)
 {
-    while (*line == ' ') line++;
-    uint8_t* sub = line;
-    while (*line && *line != ' ') line++;
-    if (*line == ' ') { *line = '\0'; line++; }
-    while (*line == ' ') line++;
+    const char* sub = nullptr;
+    line = NextToken(line, sub);
 
     const char* arg = reinterpret_cast<const char*>(line);
 
-    if (std::strcmp(reinterpret_cast<const char*>(sub), "list") == 0)
+    if (std::strcmp(sub, "list") == 0)
     {
         CmdList();
     }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "show") == 0)
+    else if (std::strcmp(sub, "show") == 0)
     {
         CmdShow(arg);
     }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "pause") == 0)
+    else if (std::strcmp(sub, "pause") == 0)
     {
         CmdPause(arg);
     }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "resume") == 0)
+    else if (std::strcmp(sub, "resume") == 0)
     {
         CmdResume(arg);
     }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "reset") == 0)
+    else if (std::strcmp(sub, "reset") == 0)
     {
         CmdReset(arg);
     }
     else
     {
-        Log::SendCommandLine("?: thread list|show|pause|resume|reset <name>");
+        Log::SendCommandLine("thread list|show|pause|resume|reset <name>");
     }
 }
+
+REGISTER_SHELL_CMD("thread", "thread list|show|pause|resume|reset", ThreadCmd::Process, thread);
 
 } // namespace debug

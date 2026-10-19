@@ -1,7 +1,8 @@
 # shell 调试台模块（log / var / shell 底座）
 
 > 一套自研的 DMA 日志系统（DUST_LOG）与自维护 UART shell 融合的统一调试台。
-> 三模块分工：**log**（日志打印 + 通道策略 + 帧队列仲裁 + 参数快照异步格式化 + 发送泵）、**var**（调试变量注册与读写）、**shell**（UART 线程底座 + 命令分发 + 日志发送驱动）。
+> 模块分工：**log**（日志打印 + 通道策略 + 帧队列仲裁 + 参数快照异步格式化 + 发送泵）、**var**（调试变量注册与读写）、**shell**（UART 线程底座 + 命令表分派 + 日志发送驱动）、**thread**（线程运行统计与暂停/恢复）、**boot**（启动期耗时查询）。
+> 命令族通过 **链接段注册**（`REGISTER_SHELL_CMD` → `.shell_cmd`），新增命令族不需要修改 `shell.cpp`。
 > 替代 Zephyr log，根治 uart3 回调槽冲突卡死。
 
 ---
@@ -13,9 +14,12 @@
 3. [log 模块详解](#3-log-模块详解)
 4. [var 模块详解](#4-var-模块详解)
 5. [shell 底座详解](#5-shell-底座详解)
-6. [命令参考](#6-命令参考)
-7. [容量模型与实测数据](#7-容量模型与实测数据)
-8. [FAQ](#8-faq)
+6. [命令族注册与分派](#6-命令族注册与分派)
+7. [thread 命令族](#7-thread-命令族)
+8. [boot 命令族](#8-boot-命令族)
+9. [命令参考](#9-命令参考)
+10. [容量模型与实测数据](#10-容量模型与实测数据)
+11. [FAQ](#11-faq)
 
 ---
 
@@ -23,7 +27,9 @@
 
 ```text
 shell/
-├── shell.hpp / shell.cpp       底座：UART 线程 + 命令分发 + 日志发送驱动
+├── shell.hpp / shell.cpp       底座：UART 线程 + 命令表分派 + 日志发送驱动
+├── shell_cmd.hpp               命令族注册宏 + 段边界访问
+├── token.hpp                   行切分工具（NextToken / SkipSpace）
 ├── boot/                       boot 命令（启动期耗时查询）
 ├── log/                        日志子系统（门面 + 策略 + 队列 + 发送泵）
 ├── var/                        调试变量（链接段收集 + var 命令）
@@ -36,7 +42,9 @@ shell/
 | var | [var/var.hpp](var/var.hpp) / [var/var.cpp](var/var.cpp) | 调试变量注册（`.shell_var` 链接段收集）+ var list/get/set | `DUST_CMD_SHELL_VAR` |
 | thread | [thread/thread_cmd.hpp](thread/thread_cmd.hpp) / [thread/thread_cmd.cpp](thread/thread_cmd.cpp) | `thread list/show/pause/resume/reset`，遍历 `thread_registry` 输出运行统计与控制线程 | `DUST_CMD_SHELL` |
 | boot | [boot/boot_cmd.hpp](boot/boot_cmd.hpp) / [boot/boot_cmd.cpp](boot/boot_cmd.cpp) | `boot timing`，遍历 `.boot_timing` 段输出启动期各项耗时 | `DUST_CMD_SHELL` |
-| shell | [shell.hpp](shell.hpp) / [shell.cpp](shell.cpp) | UART 线程底座（接收循环 + 命令分发 + 日志发送驱动）+ 初始化接入 | `DUST_CMD_SHELL` |
+| shell | [shell.hpp](shell.hpp) / [shell.cpp](shell.cpp) | UART 线程底座（接收循环 + 命令表分派 + 日志发送驱动）+ 初始化接入 | `DUST_CMD_SHELL` |
+| 命令表 | [shell_cmd.hpp](shell_cmd.hpp) | `REGISTER_SHELL_CMD` 宏 + `.shell_cmd` 段遍历 | `DUST_CMD_SHELL` |
+| 行切分 | [token.hpp](token.hpp) | `NextToken` / `SkipSpace`，各命令族共用 | `DUST_CMD_SHELL` |
 
 **log 分层（全部头文件内联实现，只有一个 .cpp）**：
 
@@ -60,6 +68,11 @@ USE_CMD_SHELL → select DUST_CMD_SHELL_LOG ─┐
 - 业务层 `USE_CMD_SHELL` 是总开关：select `DUST_CMD_SHELL_LOG` + `DUST_CMD_SHELL_VAR`，二者再各自 select `DUST_CMD_SHELL`
 - `DUST_CMD_SHELL` 是公共底座（线程 + 分发），`DUST_CMD_SHELL_VAR` / `DUST_CMD_SHELL_LOG` 各自 select 它
 - `log` 依赖 `shell`：`Log::Init()` / `Log::BindOutputStream()` 在 shell 的 `dbg_init` 里执行——没有 shell 就没人初始化 Log（通道为 `nullptr` 时发送静默丢弃）；`log` 命令也走 shell 的 `ProcessLine` 分发
+
+**命令分派（链接段注册）**：命令族不写在 `shell.cpp` 里，而是由各模块用
+`REGISTER_SHELL_CMD(name, help, handler, ident)` 注册到 `.shell_cmd` 段。
+`ProcessLine` 取第一个 token 后遍历该段匹配，命中即把剩余参数串交给 handler。
+`h` 的输出同样来自遍历，新增命令族不需要改 `shell.cpp`，帮助自动出现。
 
 **关键设计（发送路径唯一）**：log 与 shell 共用同一 `Stream` 的 DMA 发送通道——shell `thread_init` 注册 `tx_cb = Log::HandleTxDone`，log 发送帧经由同一个 `Stream`。不碰 Zephyr `uart_callback_set` 槽位，天然无冲突。
 
@@ -98,7 +111,7 @@ REGISTER_SHELL_VAR("chassis_vx", g_chassis.vx_);   // 取成员地址 + TypeMap 
 ### 命令
 
 ```
-h                       帮助
+h                       帮助（遍历 .shell_cmd 段，每族一行）
 var list                列出所有调试变量
 var get <name>          查看变量
 var set <name> <val>    修改变量
@@ -106,6 +119,25 @@ log list                列出所有 DBG 日志条目（含选中状态与输出
 log on <name>           选中一条日志流式打印（同一时间只打一条）
 log off                 停止流式打印
 log mode <name> on|off  切换输出模式（on=VOFA+纯文本，off=上色，默认上色）
+thread list             所有线程的运行统计
+thread show <name>      单线程详细统计（含耗时与栈剩余）
+thread pause <name>     暂停线程（保留现场）
+thread resume <name>    继续执行
+thread reset <name>     清零计数器
+boot timing             启动期各项耗时
+```
+
+### 注册命令族
+
+```cpp
+#include "shell_cmd.hpp"
+
+static void MyCmd(uint8_t* args)
+{
+    // args 是「命令名之后」的原始参数串
+}
+
+REGISTER_SHELL_CMD("mycmd", "mycmd 说明", MyCmd, mycmd);
 ```
 
 ---
@@ -628,15 +660,27 @@ void Shell::Task()
 3. `sem_` 是 limit=1 计数信号量，接收/发送一起 give 会合并成一次唤醒——但安全：一次唤醒顺序执行全部处理，**数据不依赖 sem_ 计数**（接收数据在 Stream 缓冲、日志帧在队列，sem_ 只是"醒来处理"通知）。
 4. **前提**：shell 线程是 `stream_` 的**唯一消费者**（remote/gimbal 各自持有自己的 Stream 实例，不共享）。
 
-### 5.3 命令分发
+### 5.3 命令分派
 
+`Shell::ProcessLine` 只做两件事：取第一个 token，然后在 `.shell_cmd` 段里线性匹配。
+具体有哪些命令族、每个族怎么解析参数，都不在本文件里——详见 [第 6 章](#6-命令族注册与分派)。
+
+```cpp
+void Shell::ProcessLine(uint8_t *line)
+{
+    const char* cmd = nullptr;
+    uint8_t* rest   = NextToken(line, cmd);
+    if (*cmd == '\0') return;
+
+    for (const ShellCmdEntry* e = ShellCmdBegin(); e < ShellCmdEnd(); ++e)
+    {
+        if (std::strcmp(e->name, cmd) == 0) { e->handler(rest); return; }
+    }
+    Log::SendCommandLine("unknown command");
+}
 ```
-解析第一个 token：
-  "var" → Var::Process(line)         （var list/get/set）
-  "log" → Log::ProcessLogCommand(line)（log list/on/off/mode）
-  "h"/"?" → CmdHelp()
-  其他 → Log::SendCommandLine("?: var/log/h")
-```
+
+帮助 `h` 同样遍历该段输出，所以**新增命令族后帮助自动出现**。
 
 ### 5.4 初始化与注册
 
@@ -649,29 +693,289 @@ REGISTER_THREAD(thread_start, PreThread, HaltOnFail, "dbg_start")              �
 
 ---
 
-## 6. 命令参考
+## 6. 命令族注册与分派
+
+### 6.1 为什么用链接段
+
+传统写法要在 `shell.cpp` 里维护一张中央命令表：
+
+```cpp
+static const Cmd kCmds[] = { { "var", Var::Process }, { "log", ... } };
+```
+
+问题是「有哪些命令」分散在两处：命令实现和这张表。漏加一行，编译不报错，运行时才发现命令不存在。
+
+链接段把「存在性」交给链接器：**实现和注册是同一行代码**，没有遗忘的可能。
+项目里已有六处同构用法：`.user_init` / `.user_thread` / `.shell_var` / `.shell_cmd` / `.remote` / `.imu`。
+
+### 6.2 数据结构（[shell_cmd.hpp](shell_cmd.hpp)）
+
+```cpp
+struct ShellCmdEntry
+{
+    const char* name;                  // 命令族名
+    void (*handler)(uint8_t* args);    // 族入口，收到参数原始串
+    const char* help;                  // 帮助摘要（一行）
+};
+```
+
+### 6.3 注册宏
+
+```cpp
+REGISTER_SHELL_CMD(name_, help_, handler_, ident_)
+```
+
+| 参数 | 说明 |
+|------|------|
+| `name_` | 命令族名（字符串字面量） |
+| `help_` | 帮助摘要（字符串字面量，一行） |
+| `handler_` | 族入口，签名 `void(uint8_t* args)` |
+| `ident_` | 注册项标识（唯一标识符，用于生成变量名，通常与命令族同名） |
+
+展开为：
+
+```cpp
+static const ::debug::ShellCmdEntry kShellCmd_<ident_>
+    __attribute__((used, __section__(".shell_cmd"))) = { name_, handler_, help_ };
+```
+
+**为什么需要 `ident_`**：`handler_` 可能是 `ThreadCmd::Process` 这种带 `::` 的限定名，
+不能直接拼进标识符（`kShellCmd_ThreadCmd::Process` 非法）。用独立的 `ident_` 解耦命名。
+
+**代价**：每个命令族占 12 B（三个指针）。当前 5 个族 = 60 B。
+
+### 6.4 链接段
+
+`framework/cmd/linker/dust_init.ld`：
+
+```ld
+SECTION_PROLOGUE(.shell_cmd,,)
+{
+    __shell_cmd_start = .;
+    KEEP(*(.shell_cmd))
+    __shell_cmd_end = .;
+} GROUP_LINK_IN(ROMABLE_REGION)
+```
+
+**只读段**（`ROM_SECTIONS`）——命令名和函数指针启动后不变。
+
+> 注意：段边界符号是 **C 链接符号**。`shell_cmd.hpp` 里用 `extern "C"` 声明，
+> 否则 C++ 名字修饰会让链接器找不到（会报 `undefined reference to debug::__shell_cmd_start`）。
+
+### 6.5 分派流程
+
+```text
+Shell::ProcessLine(line)
+  ├── NextToken(line, cmd)            ← 取第一个 token
+  ├── cmd 为空 → return
+  ├── 遍历 ShellCmdBegin() .. ShellCmdEnd()
+  │     └── strcmp(entry->name, cmd) 匹配
+  │           └── entry->handler(rest)  ← 剩余参数串原样交给族
+  └── 未匹配 → "unknown command"
+```
+
+**各族的 handler 收到的是「命令名之后」的原始串**，参数怎么切由族自己决定：
+
+```cpp
+void Var::Process(uint8_t *line)
+{
+    const char* sub = nullptr;
+    line = NextToken(line, sub);       // 取子命令
+
+    if (std::strcmp(sub, "get") == 0) {
+        CmdGet(reinterpret_cast<const char*>(line));
+    }
+    ...
+}
+```
+
+### 6.6 帮助自动生成
+
+`h` 命令本身也是一个注册项：
+
+```cpp
+static void HelpCmd(uint8_t* args) { (void)args; Shell::PrintHelp(); }
+REGISTER_SHELL_CMD("h", "help", HelpCmd, help);
+```
+
+`Shell::PrintHelp()` 遍历同一个段：
+
+```cpp
+void Shell::PrintHelp()
+{
+    for (const ShellCmdEntry* e = ShellCmdBegin(); e < ShellCmdEnd(); ++e)
+    {
+        char line[80];
+        snprintf(line, sizeof(line), "%-8s %s", e->name, e->help);
+        Log::SendCommandLine(line);
+    }
+}
+```
+
+输出样例：
+
+```text
+h        help
+boot     boot timing
+thread   thread list|show|pause|resume|reset
+var      var list|get|set
+log      log list|on|off|mode
+```
+
+**顺序由链接器决定**，不是注册的书写顺序。当前 5 条命令怎么排都看得清，
+若将来需要固定顺序，可给 `ShellCmdEntry` 加 `order` 字段并排序输出。
+
+### 6.7 行切分工具（[token.hpp](token.hpp)）
+
+```cpp
+inline uint8_t* SkipSpace(uint8_t* p);
+inline uint8_t* NextToken(uint8_t* line, const char*& out);
+```
+
+`NextToken` 原地把 token 末尾的空格改成 `'\0'`，返回下一个 token 的起点。
+连续空格按一个分隔符处理。
+
+**所有命令族共用**，替换掉了此前 5 个文件里各自手抄的 5 行切分代码。
+
+### 6.8 新增命令族的完整步骤
+
+```text
+① 新建 xxx_cmd.hpp / xxx_cmd.cpp（或写进已有文件）
+② 实现 void XxxCmd::Process(uint8_t* line)
+      - NextToken 取子命令
+      - 未知子命令输出用法提示（不带 ?: 前缀）
+③ 文件末尾写 REGISTER_SHELL_CMD("xxx", "xxx ...", XxxCmd::Process, xxx);
+④ framework/cmd/CMakeLists.txt 的 DUST_CMD_SHELL 块加源文件（若是新 .cpp）
+```
+
+**不需要改 `shell.cpp`，不需要改帮助列表。**
+
+---
+
+## 7. thread 命令族
+
+### 7.1 数据来源
+
+[thread_cmd.cpp](thread/thread_cmd.cpp) 遍历 `thread_registry`（`framework/init/thread/`），
+取每个 `ThreadBase` 的 `ThreadStats` 快照。
+
+```cpp
+class ThreadBase
+{
+    virtual const char* Name() const = 0;
+    virtual bool        GetStats(ThreadStats& out) const = 0;
+    virtual void        ResetStats() = 0;
+    virtual void        Pause() = 0;
+    virtual void        Resume() = 0;
+    virtual bool        Paused() const = 0;
+};
+```
+
+### 7.2 统计字段
+
+| 字段 | 含义 |
+|------|------|
+| `run_count` | 任务体进入次数 |
+| `retry_count` | 可恢复错误次数 |
+| `fatal_count` | 不可恢复错误次数 |
+| `drop_count` | 业务侧 `CountDrop()` 计数 |
+| `run_ns` / `max_run_ns` / `last_run_ns` | 累计 / 最长 / 最近一次耗时 |
+| `stack_unused` | 栈剩余字节（需 `CONFIG_INIT_STACKS` + `CONFIG_THREAD_STACK_INFO`） |
+| `running` / `paused` | 状态 |
+
+**只统计受管任务**（`Start(TaskFunc, period, ...)`）。裸任务（`Start(k_thread_entry_t, ...)`）
+没有外壳，`run_count` 恒为 0，但暂停/恢复仍然有效。
+
+### 7.3 命令
+
+```text
+thread list             每行：THREAD / STATE / RUN / RETRY / FATAL / DROP / STACK
+thread show <name>      state / run / retry-fatal / drop / last / max / total / stack
+thread pause <name>     k_thread_suspend，保留全部现场
+thread resume <name>    k_thread_resume，从挂起处继续
+thread reset <name>     清零计数器（不影响暂停状态）
+```
+
+**状态取值**：`running` / `paused` / `dead`。
+
+`pause` / `resume` 是**内核级挂起**——被暂停的线程若持有互斥量，等待它的线程会永久阻塞。
+当前工程只用 `irq_lock` 短临界区，暂停是安全的。
+
+### 7.4 使用注意
+
+- 名字找不到 → `thread xxx: not found`
+- 缺参数 → `usage: thread xxx <name>`
+- `thread list` 只显示**真正启动过**的线程（`Thread::Start` 时登记）
+
+---
+
+## 8. boot 命令族
+
+### 8.1 口径
+
+`boot timing` 输出的是**每个 init / thread 项的执行耗时**，不含阶段间 `k_msleep(500)`。
+
+### 8.2 数据来源
+
+`REGISTER_INIT` / `REGISTER_THREAD` 每次展开都会额外生成一个 `BootTimingSlot`：
+
+```cpp
+struct BootTimingSlot
+{
+    const char* name;   // 项目名
+    uint32_t    ns;     // 耗时（启动器写入）
+    bool        ok;     // 是否成功（启动器写入）
+};
+```
+
+放进 `.boot_timing` 段（`framework/cmd/linker/boot_timing.ld`，**DATA_SECTIONS 可写**）。
+槽数量由链接器按实际注册项决定，没有固定容量。
+
+### 8.3 输出
+
+```text
+boot timing
+BOOT TIMING (total 42 ms, 8 items)
+  imu_init          25.134 ms   ok
+  w25q128            8.021 ms   ok
+  dbg_init           3.552 ms   ok
+  ...
+```
+
+按耗时降序；失败项标 `FAIL`；无记录时输出 `(no boot timing recorded)`。
+
+### 8.4 用途
+
+- 定位「哪个 init 拖慢了启动」
+- 对比改动前后的启动耗时
+- 配合 `[boot] xxx fail` 日志判断失败发生在哪一项
+
+---
+
+## 9. 命令参考
 
 | 命令 | 输出 |
 |------|------|
-| `h` / `?` | 帮助 14 行 |
+| `h` | 遍历 `.shell_cmd` 段，每族一行（顺序由链接器决定） |
 | `var list` | 每个变量一行 `名字 (类型) = 值` + `--- N variables ---` |
 | `var get <name>` | `名字 = 值`；`not found: <name>` |
 | `var set <name> <val>` | `ok`；坏值 `bad value`；缺值 `usage: var set <name> <value>` |
 | `log list` | 每个 DBG 条目一行 `名字 [ON]/[off] [vofa]/[color]` |
 | `log on <name>` | `log on: ok`；不存在 `log on: not found` |
 | `log off` | `log off: ok` |
-| `log mode <name> on` | `log mode: vofa`；不存在 `log mode: not found`；缺参 `?: log mode <name> on\|off` |
+| `log mode <name> on` | `log mode: vofa`；不存在 `log mode: not found`；缺参 `log mode <name> on\|off` |
 | `log mode <name> off` | `log mode: color`；不存在 `log mode: not found` |
-| `thread list` | 每个线程一行 `名字 状态 RUN RETRY FATAL EXIT DROP STACK` + `--- N threads ---` |
-| `thread show <name>` | 多行：state / run / retry-fatal / exit / drop / last / max / total / stack |
+| `thread list` | 每个线程一行 `名字 状态 RUN RETRY FATAL DROP STACK` + `--- N threads ---` |
+| `thread show <name>` | 多行：state / run / retry-fatal / drop / last / max / total / stack |
 | `thread pause <name>` | `thread pause: ok`；不存在 `thread pause: not found` |
 | `thread resume <name>` | `thread resume: ok`；不存在 `thread resume: not found` |
 | `thread reset <name>` | `thread reset: ok`；不存在 `thread reset: not found` |
 | `boot timing` | `BOOT TIMING (total N ms, M items)` + 按耗时降序的项列表；无记录 `(no boot timing recorded)` |
+| 未知命令 | `unknown command` |
 
 ---
 
-## 7. 容量模型与实测数据（2026-08-06，921600 波特）
+## 10. 容量模型与实测数据（2026-08-06，921600 波特）
 
 **工程公式**（帧池 8 帧）：
 
@@ -695,7 +999,7 @@ K_min = max(1, B - 1)       给定突发需求 B 所需最少帧数
 
 ---
 
-## 8. FAQ
+## 11. FAQ
 
 **Q：DUST_LOG 打印依赖线程吗？**
 A：**分时段**。boot 早期（`shell_own_=false`）调用点直发，不依赖线程；shell 线程启动（`PreThread`，`MarkShellThreadReady`）接管后走异步，依赖 shell 线程 `FormatOnePendingRecord()` 展开快照 + `SendNextFrameIfIdle()` 驱动 DMA。唯一前置是 `Log::Init()` / `Log::BindOutputStream()` 已执行（`dbg_init`，PreInit 阶段）。
@@ -741,6 +1045,30 @@ A：命令响应走 Cmd 档（事件后、DBG 前），DBG 流式打印期间命
 
 **Q：`sem_` 是 limit=1，接收和发送一起 give 会不会丢事件？**
 A：不会。合并成一次唤醒但顺序执行 `SendNextFrameIfIdle`+`FormatOnePendingRecord`+`Read`，发送与接收都被处理；数据在队列/缓冲里不依赖 sem_ 计数，最多延迟到下次处理。
+
+**Q：新增一个命令族要改几个地方？**
+A：**只改自己的文件**。写 `void Xxx::Process(uint8_t*)` + 一行 `REGISTER_SHELL_CMD(...)`，若是新 `.cpp` 再在 CMake 里加源文件。`shell.cpp` 和帮助列表都不用动——`h` 是遍历 `.shell_cmd` 段生成的。
+
+**Q：`h` 的输出顺序为什么每次可能不同？**
+A：`.shell_cmd` 段内顺序由链接器决定，不保证等于注册的书写顺序。当前 5 条命令怎么排都看得清；若需要固定顺序，给 `ShellCmdEntry` 加 `order` 字段并排序输出。
+
+**Q：为什么 `REGISTER_SHELL_CMD` 要四个参数而不是三个？**
+A：第四个 `ident_` 用来生成变量名。`handler_` 可能是 `ThreadCmd::Process` 这种带 `::` 的限定名，不能拼进标识符（`kShellCmd_ThreadCmd::Process` 非法）。拆开后 `nm` 里也能看到 `kShellCmd_thread` 这种人能读的名字。
+
+**Q：段边界符号链接时报 `undefined reference to debug::__shell_cmd_start`？**
+A：声明写进了 `namespace debug`，C++ 名字修饰让它变成 `debug::__shell_cmd_start`，而链接脚本导出的是 C 符号 `__shell_cmd_start`。用 `extern "C"` 声明即可。
+
+**Q：为什么 `.shell_cmd` 用 ROM_SECTIONS，而 `.boot_timing` 用 DATA_SECTIONS？**
+A：命令表只存名字和函数指针，启动后不变，只读即可；耗时槽需要在启动时写入 `ns` / `ok`，必须是可写的 RAM 段（初值从 ROM 拷贝）。
+
+**Q：`thread list` 里的 RUN 为什么一直是 0？**
+A：该线程用的是裸任务（`Start(k_thread_entry_t, ...)`），没有受管任务外壳，不采集统计。要统计就改成 `Start(TaskFunc, period, ...)` 并把任务体写成「一拍」。
+
+**Q：`thread pause` 之后 `thread resume` 没反应？**
+A：先看 `thread list` 的 STATE：如果是 `dead`，线程已经退出了（`Fatal` 或钩子返回 false），`resume` 对已退出的线程无效。`paused` 状态才可恢复。
+
+**Q：`boot timing` 的 total 为什么比实际启动时间小很多？**
+A：`total` 是**所有条目执行时间之和**，不含阶段间的 `k_msleep(500)`（9 次 = 4.5 秒）。要看总启动时间需要另外打点。
 
 **Q：CONFIG_DUST_CMD_SHELL_LOG 关闭时调用 DUST_LOG_* 会怎样？**
 A：宏为空（log.hpp `#else` 空宏），调用点零开销、编译不报错——与 Zephyr LOG=n 静默语义一致。

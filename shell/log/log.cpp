@@ -2,14 +2,16 @@
  * @file log.cpp
  * @author qingyu
  * @brief DUST_LOG 自研日志系统实现 — 帧池三档优先级仲裁发送
- * @version 1.0
- * @date 2026-10-05
+ * @version 1.1
+ * @date 2026-10-20
  *
  * @copyright Copyright (c) 2026
  *
  */
 
 #include "log.hpp"
+#include "shell_cmd.hpp"
+#include "token.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -278,49 +280,67 @@ void Log::QueueFrameForShellSend(const char* data, int len, TxPriority prio, uin
  */
 void Log::ProcessLogCommand(uint8_t* line)
 {
-    while (*line == ' ') line++;
-    uint8_t* sub = line;
-    while (*line && *line != ' ') line++;
-    if (*line == ' ') { *line = '\0'; line++; }
-    while (*line == ' ') line++;
+    const char* sub = nullptr;
+    line = NextToken(line, sub);
 
-    if (std::strcmp(reinterpret_cast<const char*>(sub), "list") == 0)
+    if (std::strcmp(sub, "list") == 0)
     {
         PrintLogList();
     }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "on") == 0)
+    else if (std::strcmp(sub, "on") == 0)
     {
-        if (SelectDebugEntry(reinterpret_cast<const char*>(line))) SendCommandLine("log on: ok");
-        else SendCommandLine("log on: not found");
+        if (*line == '\0') {
+            SendCommandLine("usage: log on <name>");
+            return;
+        }
+
+        if (SelectDebugEntry(reinterpret_cast<const char*>(line))) {
+            SendCommandLine("log on: ok");
+        } else {
+            SendCommandLine("log on: not found");
+        }
     }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "off") == 0)
+    else if (std::strcmp(sub, "off") == 0)
     {
         DeselectDebugEntry();
         SendCommandLine("log off: ok");
     }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "mode") == 0)
+    else if (std::strcmp(sub, "mode") == 0)
     {
-        // line 形如 "<name> on|off"（on=VOFA+ 纯文本，off=上色；vofa/color 为同义别名）
-        uint8_t* name = line;
-        while (*line && *line != ' ') line++;
-        if (*line == ' ') { *line = '\0'; line++; }
-        while (*line == ' ') line++;
+        // 形如 "<name> on|off"（on=VOFA+ 纯文本，off=上色；vofa/color 为同义别名）
+        const char* name = nullptr;
+        line = NextToken(line, name);
+
+        if (*name == '\0') {
+            SendCommandLine("log mode <name> on|off");
+            return;
+        }
 
         if (std::strcmp(reinterpret_cast<const char*>(line), "on") == 0 ||
             std::strcmp(reinterpret_cast<const char*>(line), "vofa") == 0)
         {
-            if (SetDebugVofa(reinterpret_cast<const char*>(name), true)) SendCommandLine("log mode: vofa");
-            else SendCommandLine("log mode: not found");
+            if (SetDebugVofa(name, true)) {
+                SendCommandLine("log mode: vofa");
+            } else {
+                SendCommandLine("log mode: not found");
+            }
         }
         else if (std::strcmp(reinterpret_cast<const char*>(line), "off") == 0 ||
                  std::strcmp(reinterpret_cast<const char*>(line), "color") == 0)
         {
-            if (SetDebugVofa(reinterpret_cast<const char*>(name), false)) SendCommandLine("log mode: color");
-            else SendCommandLine("log mode: not found");
+            if (SetDebugVofa(name, false)) {
+                SendCommandLine("log mode: color");
+            } else {
+                SendCommandLine("log mode: not found");
+            }
         }
-        else SendCommandLine("?: log mode <name> on|off");
+        else {
+            SendCommandLine("log mode <name> on|off");
+        }
     }
-    else SendCommandLine("?: log list|on <name>|off|mode <name> on|off");
+    else {
+        SendCommandLine("log list|on <name>|off|mode <name> on|off");
+    }
 }
 
 /**
@@ -336,5 +356,7 @@ void Log::PrintLogList()
         SendCommandLine(line);
     }
 }
+
+REGISTER_SHELL_CMD("log", "log list|on|off|mode", Log::ProcessLogCommand, log);
 
 } // namespace debug

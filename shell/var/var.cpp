@@ -2,8 +2,8 @@
  * @file var.cpp
  * @author qingyu
  * @brief var 命令实现 — var list/get/set（输出走 DUST_LOG 命令响应）
- * @version 0.1
- * @date 2026-08-06
+ * @version 0.2
+ * @date 2026-10-20
  *
  * @copyright Copyright (c) 2026
  *
@@ -11,6 +11,8 @@
 
 #include "var.hpp"
 #include "log.hpp"
+#include "shell_cmd.hpp"
+#include "token.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -224,31 +226,35 @@ void Var::CmdSet(const char *name, const char *val)
  */
 void Var::Process(uint8_t *line)
 {
-    while (*line == ' ') line++;
-    uint8_t *sub = line;
-    while (*line && *line != ' ') line++;
-    if (*line == ' ') { *line = '\0'; line++; }
-    while (*line == ' ') line++;
+    const char* sub = nullptr;
+    line = NextToken(line, sub);
 
-    if (std::strcmp(reinterpret_cast<const char*>(sub), "list") == 0)
+    if (std::strcmp(sub, "list") == 0)
     {
         CmdList();
     }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "get") == 0)
+    else if (std::strcmp(sub, "get") == 0)
     {
+        if (*line == '\0') { Log::SendCommandLine("usage: var get <name>"); return; }
         CmdGet(reinterpret_cast<const char*>(line));
     }
-    else if (std::strcmp(reinterpret_cast<const char*>(sub), "set") == 0)
+    else if (std::strcmp(sub, "set") == 0)
     {
-        // 原 CmdSet 解析逻辑（name + value）
-        uint8_t *name = line;
-        uint8_t *val  = nullptr;
-        while (*line && *line != ' ') line++;
-        if (*line == ' ') { *line = '\0'; line++; while (*line == ' ') line++; val = line; }
-        if (val == nullptr || *val == '\0') Log::SendCommandLine("usage: var set <name> <value>");
-        else CmdSet(reinterpret_cast<const char*>(name), reinterpret_cast<const char*>(val));
+        const char* name = nullptr;
+        line = NextToken(line, name);
+
+        if (*name == '\0' || *line == '\0') {
+            Log::SendCommandLine("usage: var set <name> <value>");
+            return;
+        }
+        CmdSet(name, reinterpret_cast<const char*>(line));
     }
-    else Log::SendCommandLine("?: var list|get <name>|set <name> <val>");
+    else
+    {
+        Log::SendCommandLine("var list|get <name>|set <name> <val>");
+    }
 }
+
+REGISTER_SHELL_CMD("var", "var list|get|set", Var::Process, var);
 
 } // namespace debug

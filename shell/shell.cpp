@@ -1,20 +1,20 @@
 /**
  * @file shell.cpp
  * @author qingyu
- * @brief 自维护 UART 线程底座 — 命令分发 + 初始化接入 DUST_LOG
- * @version 0.4
- * @date 2026-10-19
+ * @brief 自维护 UART 线程底座 — 命令表分派 + 初始化接入 DUST_LOG
+ * @version 0.5
+ * @date 2026-10-20
  *
  * @copyright Copyright (c) 2026
  *
  */
 
 #include "shell.hpp"
-#include "var.hpp"
+#include "shell_cmd.hpp"
+#include "token.hpp"
 #include "log.hpp"
-#include "boot_cmd.hpp"
-#include "thread_cmd.hpp"
 #include "Init_entry.hpp"
+#include <cstdio>
 #include <cstring>
 #include "uart.hpp"
 #include "zephyr/kernel.h"
@@ -35,66 +35,58 @@ bool Shell::Init(Stream &stream)
 }
 
 /**
- * @brief 输出命令帮助
+ * @brief 输出帮助：遍历命令表，每族一行
+ *
+ * 命令族由各模块 REGISTER_SHELL_CMD 注册，帮助文本随注册项自动出现。
  */
-void Shell::CmdHelp() const
+void Shell::PrintHelp()
 {
-    Log::SendCommandLine("var list                列出所有调试变量");
-    Log::SendCommandLine("var get <name>          查看变量");
-    Log::SendCommandLine("var set <name> <val>    修改变量");
-    Log::SendCommandLine("log list                列出所有日志条目（含选中状态）");
-    Log::SendCommandLine("log on <name>           选中某条日志流式打印（同一时间只打一条）");
-    Log::SendCommandLine("log off                 停止打印");
-    Log::SendCommandLine("log mode <name> on|off  切换输出模式（on=VOFA+纯文本，off=上色）");
-    Log::SendCommandLine("thread list             列出所有线程运行统计");
-    Log::SendCommandLine("thread show <name>      查看单线程详细统计");
-    Log::SendCommandLine("thread pause <name>     暂停线程（保留现场）");
-    Log::SendCommandLine("thread resume <name>    恢复被暂停的线程");
-    Log::SendCommandLine("thread reset <name>     清零线程计数器");
-    Log::SendCommandLine("boot timing             启动期各项耗时");
-    Log::SendCommandLine("h/?                     帮助");
+    for (const ShellCmdEntry* e = ShellCmdBegin(); e < ShellCmdEnd(); ++e)
+    {
+        char line[80];
+        snprintf(line, sizeof(line), "%-8s %s", e->name, e->help);
+        Log::SendCommandLine(line);
+    }
 }
 
 /**
- * @brief 解析一行命令并分派到对应的命令族
+ * @brief 解析一行命令并按命令表分派
+ *
+ * 取第一个 token 作为命令族名，在 .shell_cmd 段内线性匹配，
+ * 命中则把剩余参数串交给该族的 handler。
+ *
  * @param line 行缓冲指针（可写，解析时会被修改）
  */
 void Shell::ProcessLine(uint8_t *line)
 {
-    while (*line == ' ') line++;
-    if (*line == '\0' || *line == '\r' || *line == '\n') return;
+    const char* cmd = nullptr;
+    uint8_t* rest   = NextToken(line, cmd);
 
-    // 解析第一个 token：命令族
-    uint8_t *cmd = line;
-    while (*line && *line != ' ') line++;
-    if (*line == ' ') { *line = '\0'; line++; }
-    while (*line == ' ') line++;
+    if (*cmd == '\0') return;
 
-    if (std::strcmp(reinterpret_cast<const char*>(cmd), "var") == 0)
+    for (const ShellCmdEntry* e = ShellCmdBegin(); e < ShellCmdEnd(); ++e)
     {
-        Var::Process(line);          			// var list/get/set —— 实现在 var.cpp
+        if (std::strcmp(e->name, cmd) == 0)
+        {
+            e->handler(rest);
+            return;
+        }
     }
-    else if (std::strcmp(reinterpret_cast<const char*>(cmd), "log") == 0)
-    {
-        Log::ProcessLogCommand(line);          // log list/on/off —— 实现在 log.cpp
-    }
-    else if (std::strcmp(reinterpret_cast<const char*>(cmd), "thread") == 0)
-    {
-        ThreadCmd::Process(line);              // thread list/show/pause/resume/reset
-    }
-    else if (std::strcmp(reinterpret_cast<const char*>(cmd), "boot") == 0)
-    {
-        BootCmd::Process(line);                // boot timing
-    }
-    else if (std::strcmp(reinterpret_cast<const char*>(cmd), "h") == 0 || std::strcmp(reinterpret_cast<const char*>(cmd), "?") == 0)
-    {
-        CmdHelp();
-    }
-    else
-    {
-        Log::SendCommandLine("?: var/log/thread/boot/h");
-    }
+
+    Log::SendCommandLine("unknown command");
 }
+
+/**
+ * @brief 帮助命令入口（注册到命令表）
+ * @param args 未使用
+ */
+static void HelpCmd(uint8_t* args)
+{
+    (void)args;
+    Shell::PrintHelp();
+}
+
+REGISTER_SHELL_CMD("h", "help", HelpCmd, help);
 
 /**
  * @brief 线程主循环，等待 UART 数据并逐行处理
@@ -103,18 +95,18 @@ void Shell::Task()
 {
     for (;;)
     {
-        k_sem_take(&stream_->sem_, K_FOREVER);   		 			// 通道事件：接收数据 OR 日志发送需要驱动
+        k_sem_take(&stream_->sem_, K_FOREVER);        // 通道事件：接收数据 OR 日志发送需要驱动
 
-        Log::SendNextFrameIfIdle();                          								 // 先驱动日志发送（DMA 空闲则续发）
+        Log::SendNextFrameIfIdle();                   // 先驱动日志发送（DMA 空闲则续发）
 
-        while (Log::FormatOnePendingRecord())    										 // 出队参数快照请求 → 展开入帧池 → 泵
+        while (Log::FormatOnePendingRecord())         // 出队参数快照请求 → 展开入帧池 → 泵
         {
             Log::SendNextFrameIfIdle();
         }
 
         uint8_t buf[32];
         uint16_t n = stream_->Read(buf, sizeof(buf));
-        if (n == 0) continue;                     								 // 发送唤醒，无接收数据
+        if (n == 0) continue;                         // 发送唤醒，无接收数据
 
         for (uint16_t i = 0; i < n; i++)
         {
@@ -167,10 +159,10 @@ static bool thread_init()
 
     if (!shell_.Init(rx)) return false;
 
-	Log::Init();
+    Log::Init();
     Log::BindOutputStream(&rx);
 
-	DUST_LOG_INF("shell init");
+    DUST_LOG_INF("shell init");
 
     return true;
 }
@@ -182,8 +174,8 @@ static bool thread_init()
 static bool thread_start()
 {
     shell_.Start();
-	Log::MarkShellThreadReady();                       									// 首次运行即接管发送（重复置 true 无害）
-	DUST_LOG_INF("shell send owner taken"); 									// 发送模式切换：调用点直发 → shell 线程驱动
+    Log::MarkShellThreadReady();                  // 首次运行即接管发送（重复置 true 无害）
+    DUST_LOG_INF("shell send owner taken");       // 发送模式切换：调用点直发 → shell 线程驱动
     return true;
 }
 
