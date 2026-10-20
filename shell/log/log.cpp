@@ -296,7 +296,7 @@ void Log::ProcessLogCommand(uint8_t* line)
 
         if (SelectDebugEntry(reinterpret_cast<const char*>(line))) {
             SendCommandLine("log on: ok");
-        } else {
+        } else  {
             SendCommandLine("log on: not found");
         }
     }
@@ -316,8 +316,7 @@ void Log::ProcessLogCommand(uint8_t* line)
             return;
         }
 
-        if (std::strcmp(reinterpret_cast<const char*>(line), "on") == 0 ||
-            std::strcmp(reinterpret_cast<const char*>(line), "vofa") == 0)
+        if (std::strcmp(reinterpret_cast<const char*>(line), "on") == 0 || std::strcmp(reinterpret_cast<const char*>(line), "vofa") == 0)
         {
             if (SetDebugVofa(name, true)) {
                 SendCommandLine("log mode: vofa");
@@ -325,8 +324,7 @@ void Log::ProcessLogCommand(uint8_t* line)
                 SendCommandLine("log mode: not found");
             }
         }
-        else if (std::strcmp(reinterpret_cast<const char*>(line), "off") == 0 ||
-                 std::strcmp(reinterpret_cast<const char*>(line), "color") == 0)
+        else if (std::strcmp(reinterpret_cast<const char*>(line), "off") == 0 || std::strcmp(reinterpret_cast<const char*>(line), "color") == 0)
         {
             if (SetDebugVofa(name, false)) {
                 SendCommandLine("log mode: color");
@@ -334,11 +332,13 @@ void Log::ProcessLogCommand(uint8_t* line)
                 SendCommandLine("log mode: not found");
             }
         }
-        else {
+        else 
+		{
             SendCommandLine("log mode <name> on|off");
         }
     }
-    else {
+    else 
+	{
         SendCommandLine("log list|on <name>|off|mode <name> on|off");
     }
 }

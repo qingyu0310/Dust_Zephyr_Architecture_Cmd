@@ -34,4 +34,5 @@ if(CONFIG_DUST_CMD_W25Q128)
 endif()
 
 target_include_directories(app PRIVATE fatal)
+# init/thread 的 include 由 framework/init/CMakeLists.txt 全局加入（thread_registry.hpp）
 target_sources(app PRIVATE fatal/fatal.cpp)

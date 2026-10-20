@@ -2,7 +2,7 @@
  * @file shell.hpp
  * @author qingyu
  * @brief 自维护 UART 线程底座 — 接收循环 + 命令族分派
- * @version 0.4
+ * @version 0.5
  * @date 2026-10-20
  *
  * @copyright Copyright (c) 2026
@@ -43,6 +43,15 @@ public:
     void Pause()  { thread_.Pause(); }
     void Resume() { thread_.Resume(); }
     bool Paused() const { return thread_.Paused(); }
+
+    /**
+     * @brief 设置「保留标记」：致命错误冻结业务线程时本线程继续运行
+     *
+     * shell 是日志的唯一消费者和唯一的现场观察窗口，不能被冻结。
+     *
+     * @param on true=保留
+     */
+    void SetKeepAlive(bool on) { thread_.SetKeepAlive(on); }
 
     /**
      * @brief 输出帮助：遍历命令表，每族一行

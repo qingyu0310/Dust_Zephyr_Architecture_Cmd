@@ -1,9 +1,9 @@
 /**
  * @file fatal.cpp
  * @author qingyu
- * @brief 致命错误处理 — 栈溢出/CPU 异常经 DUST_LOG 上报
- * @version 0.1
- * @date 2026-08-07
+ * @brief 致命错误处理 — 冻结业务线程、保留 shell、上报现场
+ * @version 0.3
+ * @date 2026-10-20
  *
  * @copyright Copyright (c) 2026
  *
@@ -12,6 +12,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/fatal_types.h>
 #include "log.hpp"
+#include "esf_dump.hpp"
 
 /**
  * @brief 致命错误原因字符串（K_ERR_*）
@@ -34,31 +35,30 @@ static const char* FatalReasonStr(unsigned int reason)
 /**
  * @brief 覆盖 Zephyr 弱定义致命错误处理器，让栈溢出经 DUST_LOG 可见
  * @param reason 致命错误原因（K_ERR_*，栈溢出 = K_ERR_STACK_CHK_FAIL=2）
- * @param esf    异常栈帧（riscv 含 mepc/mstatus，ARM 含 pc/xpsr）
+ * @param esf    异常栈帧（架构相关，交给 DumpEsf 处理）
  *
  * Zephyr 默认实现走 LOG_ERR + printk，本项目 CONFIG_LOG/CONSOLE 关闭导致
- * 输出被吞。覆盖后用 DUST_LOG_ERR 上报原因 + 线程名 + 现场寄存器：
- * riscv 打印 mcause/mepc/mstatus（PMP 栈溢出 mcause=5/7），ARM 打印
- * pc/xpsr。打印后停机等待复位，不重启以保留现场。
+ * 输出被吞。覆盖后用 DUST_LOG_ERR 上报原因 + 线程名，架构相关寄存器由
+ * DumpEsf() 输出（实现在子树 drivers/fatal/<vendor>/）。
+ * 打印后停机等待复位，不重启以保留现场。
  */
 extern "C" void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
 {
     const char* thread = k_thread_name_get(k_current_get());
 
-#if defined(CONFIG_CPU_CORTEX_M)
-    DUST_LOG_ERR("[fatal] %s (reason=%u) thread=%s pc=%lx xpsr=%lx",
-                 FatalReasonStr(reason), reason, (thread != nullptr) ? thread : "?",
-                 (unsigned long)esf->basic.pc, (unsigned long)esf->basic.xpsr);
-#elif defined(CONFIG_RISCV)
-    unsigned long mcause = 0;
-    __asm__ volatile("csrr %0, mcause" : "=r"(mcause));
-    DUST_LOG_ERR("[fatal] %s (reason=%u) thread=%s mcause=%lx mepc=%lx mstatus=%lx",
-                 FatalReasonStr(reason), reason, (thread != nullptr) ? thread : "?",
-                 mcause, esf->mepc, esf->mstatus);
-#else
-    DUST_LOG_ERR("[fatal] %s (reason=%u) thread=%s",
-                 FatalReasonStr(reason), reason, (thread != nullptr) ? thread : "?");
-#endif
+    DUST_LOG_ERR("[fatal] %s (reason=%u) thread=%s", FatalReasonStr(reason), reason, (thread != nullptr) ? thread : "?");
+
+    DumpEsf(esf);
 
     while (1) {}
+}
+
+/**
+ * @brief 默认空实现：板卡没选 esf dump 实现时链接不报错
+ * @param esf 异常栈帧（未使用）
+ */
+__weak void DumpEsf(const struct arch_esf* esf)
+{
+    ARG_UNUSED(esf);
+    DUST_LOG_WRN("[fatal] esf dump not configured for this board");
 }

@@ -2,7 +2,7 @@
  * @file shell.cpp
  * @author qingyu
  * @brief 自维护 UART 线程底座 — 命令表分派 + 初始化接入 DUST_LOG
- * @version 0.5
+ * @version 0.6
  * @date 2026-10-20
  *
  * @copyright Copyright (c) 2026
@@ -95,11 +95,11 @@ void Shell::Task()
 {
     for (;;)
     {
-        k_sem_take(&stream_->sem_, K_FOREVER);        // 通道事件：接收数据 OR 日志发送需要驱动
+        k_sem_take(&stream_->sem_, K_FOREVER);         // 通道事件：接收数据 OR 日志发送需要驱动
 
-        Log::SendNextFrameIfIdle();                   // 先驱动日志发送（DMA 空闲则续发）
+        Log::SendNextFrameIfIdle();                   				// 先驱动日志发送（DMA 空闲则续发）
 
-        while (Log::FormatOnePendingRecord())         // 出队参数快照请求 → 展开入帧池 → 泵
+        while (Log::FormatOnePendingRecord())         				// 出队参数快照请求 → 展开入帧池 → 泵
         {
             Log::SendNextFrameIfIdle();
         }
@@ -173,9 +173,11 @@ static bool thread_init()
  */
 static bool thread_start()
 {
+    shell_.SetKeepAlive(true);      // fatal 冻结业务线程时保留 shell（日志消费者 + 观察窗口）
     shell_.Start();
-    Log::MarkShellThreadReady();                  // 首次运行即接管发送（重复置 true 无害）
-    DUST_LOG_INF("shell send owner taken");       // 发送模式切换：调用点直发 → shell 线程驱动
+    Log::MarkShellThreadReady();                  		// 首次运行即接管发送（重复置 true 无害）
+    DUST_LOG_INF("shell send owner taken");        // 发送模式切换：调用点直发 → shell 线程驱动
+
     return true;
 }
 
