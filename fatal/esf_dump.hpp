@@ -2,8 +2,8 @@
  * @file esf_dump.hpp
  * @author qingyu
  * @brief 异常栈帧转储接口 — 架构层只声明，实现放在子树 drivers
- * @version 0.1
- * @date 2026-10-20
+ * @version 0.2
+ * @date 2026-10-21
  *
  * @copyright Copyright (c) 2026
  *
@@ -22,3 +22,14 @@
  * @param esf 异常栈帧（可能为 nullptr）
  */
 void DumpEsf(const struct arch_esf* esf);
+
+/**
+ * @brief 致命上下文同步输出一行
+ *
+ * 逐字节轮询 UART 发送寄存器直发，不经 DMA、不入日志队列、不等中断回调，
+ * 也不依赖 shell 线程调度。fatal handler 内中断已关且随后永久自旋，只有
+ * 这条路径能保证字符真的发出。
+ *
+ * @param text 以 '\0' 结尾的字符串
+ */
+void FatalOut(const char* text);
