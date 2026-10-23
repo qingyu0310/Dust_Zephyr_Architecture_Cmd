@@ -231,6 +231,43 @@ flash --runner openocd        → 指定 runner
 flash -d build2               → 烧录 <项目根>\build2
 ```
 
+### 烧录器怎么选
+
+**`dust flash` 不选烧录器**。烧录器由 `board.cmake` 在 `west build` 时配好、固化进 `build/zephyr/runners.yaml`，`dust flash` 只做"站到项目根 + 原样透传"。
+
+配置分四项，叠加生效：
+
+| 配置 | 写在哪 | 语义 | 落到 runners.yaml |
+|---|---|---|---|
+| `include(${ZEPHYR_BASE}/boards/common/xxx.board.cmake)` | 板卡定义层 | 声明这个工具可用（候选集合） | `runners:` |
+| `board_runner_args(<runner> "参数")` | 板卡定义层 / 项目侧 | 给这个工具传参数（芯片型号、接口、速率） | `args.<runner>:` |
+| `set(BOARD_FLASH_RUNNER <runner>)` | 项目侧 `board.cmake` | 从候选里选默认 | `flash-runner:` |
+| `set(OPENOCD "<路径>")` | 项目侧 `board.cmake` | 工具本体在哪 | `config.openocd:` |
+
+**临时换工具不用改任何文件**：`--runner` 是 west 命令行显式参数，优先级高于 `runners.yaml` 的 `flash-runner` 与 `board.cmake` 的 `BOARD_FLASH_RUNNER`：
+
+```
+dust flash --runner jlink          → 这一次用 jlink，build\ 里的配置不动
+dust flash --runner stm32cubeprogrammer
+```
+
+**执行前会打印生效配置**（只读，不参与烧录），出问题时先看这四行：
+
+```
+[dust] project root : E:\Zephyr\zephyr_user\project
+[dust] board        : hpm5361icb
+[dust] flash runner : openocd
+[dust] openocd      : E:/Zephyr_HPMicro/sdk_env/tools/openocd/openocd.exe
+```
+
+没有 `build\zephyr/runners.yaml` 时打 `[dust] no build\zephyr\runners.yaml -- run "dust build" first`，随后仍由 west 自己报错（不吞错）。
+
+| 板卡 | 候选 runner | 默认 | 工具路径来源 |
+|---|---|---|---|
+| `st/stm32g431cbtx`（gongxun） | openocd / jlink / stm32cubeprogrammer | 项目侧选 `openocd` | 项目侧 `set(OPENOCD ...)` |
+| `st/puzhong` | openocd / jlink / stm32cubeprogrammer | 项目侧选 `openocd` | 项目侧 `set(OPENOCD ...)` |
+| `hpm/hpm5361icb` | openocd | 板卡层 `board_set_flasher_ifnset` 兜底 | 板卡层按 `SDK_GLUE_DIR` 相对推导 |
+
 ### flash.ps1
 
 PowerShell 版，`-Opts` 传额外参数。

@@ -27,4 +27,18 @@ dust flash could not locate a project root from:
 
 Set-Location $targetDir
 
+# 打印生效配置（只读，不参与烧录）
+$runnersYaml = "build\zephyr\runners.yaml"
+if (Test-Path $runnersYaml) {
+    Write-Host "[dust] project root : $targetDir"
+    $board = (Select-String -Path "build\CMakeCache.txt" -Pattern '^BOARD:STRING=(.*)$').Matches.Groups[1].Value
+    $runner = (Select-String -Path $runnersYaml -Pattern '^flash-runner:\s*(.*)$').Matches.Groups[1].Value
+    $openocd = (Select-String -Path $runnersYaml -Pattern '^  openocd:\s*(.*)$').Matches.Groups[1].Value
+    Write-Host "[dust] board        : $board"
+    Write-Host "[dust] flash runner : $runner"
+    Write-Host "[dust] openocd      : $openocd"
+} else {
+    Write-Host '[dust] no build\zephyr\runners.yaml -- run "dust build" first'
+}
+
 west flash $Opts
