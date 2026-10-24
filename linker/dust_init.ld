@@ -67,3 +67,4 @@ SECTION_PROLOGUE(.shell_cmd,,)
     KEEP(*(.shell_cmd))
     __shell_cmd_end = .;
 } GROUP_LINK_IN(ROMABLE_REGION)
+
