@@ -1,0 +1,10 @@
+# 用户层 topic 模块 — 门禁 DUST_TPC_XXX（跟架构层 topic 同风格）
+# Kconfig 由 zephyr/module.yml 自动加载（build.kconfig: Kconfig），无需 rsource。
+#
+# 新增内容时照这块追加：
+#
+# config DUST_TPC_XXX
+#     bool "XXX"
+#     default n
+#     help
+#       XXX 说明。

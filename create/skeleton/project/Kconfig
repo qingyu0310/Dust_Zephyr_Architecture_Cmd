@@ -1,0 +1,54 @@
+# 用户区业务门禁 Kconfig
+# 业务门禁符号（PRJ_MAIN / TRD_XXX / USE_XXX）保持原名，不加 DUST_ 前缀
+# 业务门禁 select 的架构符号统一 DUST_ 前缀
+
+config PRJ_MAIN
+    bool "Main business project"
+    default n
+
+if PRJ_MAIN
+
+# ============================================================================
+
+# =================       功能配置区 — 各模块开关       ========================
+
+config USE_CMD_SHELL
+    bool "Shell debug console (thread + var/log)"
+    default n
+    select DUST_CMD_SHELL_LOG
+    select DUST_CMD_SHELL_VAR
+    help
+      Shell debug console - UART thread + var/log sub-commands.
+      打开需要 overlay 里配 shell-uart 别名，否则 shell.cpp 编译报错。
+
+config USE_CMD_BUZZER
+    bool "Buzzer control"
+    default n
+    select DUST_CMD_BUZZER
+    help
+      Buzzer control - PWM beep via cmd/buzzer.
+
+config USE_CMD_FLASH
+    bool "SPI Flash"
+    default n
+    select DUST_CMD_FLASH
+    help
+      SPI NOR Flash read/write/erase via cmd/flash.
+
+# ============================================================================
+
+# =================               TRD_XXX                 ====================
+# 新增业务线程时照下面这块追加，并在 project/thread/CMakeLists.txt 加对应 if 块
+#
+# config TRD_XXX
+#     bool "XXX thread"
+#     default n
+#     select DUST_DEV_XXX
+#     help
+#       XXX thread description.
+
+# ============================================================================
+
+endif # PRJ_MAIN
+
+source "Kconfig.zephyr"

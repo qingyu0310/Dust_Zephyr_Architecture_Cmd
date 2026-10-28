@@ -1,0 +1,10 @@
+# 用户层 algorithm 模块 — 门禁 DUST_CHK_XXX（跟架构层 algorithm 同风格）
+# Kconfig 由 zephyr/module.yml 自动加载（build.kconfig: Kconfig），无需 rsource。
+#
+# 新增一个算法时照这块追加：
+#
+# config DUST_CHK_XXX
+#     bool "XXX checksum"
+#     default n
+#     help
+#       XXX 说明。

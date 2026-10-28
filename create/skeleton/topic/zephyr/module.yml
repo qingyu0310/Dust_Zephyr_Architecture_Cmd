@@ -1,0 +1,3 @@
+name: user_topic
+build:
+  kconfig: Kconfig

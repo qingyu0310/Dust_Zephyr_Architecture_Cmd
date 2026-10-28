@@ -1,0 +1,3 @@
+name: user_drivers
+build:
+  kconfig: Kconfig
