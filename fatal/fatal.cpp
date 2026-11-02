@@ -39,8 +39,8 @@ static const char* FatalReasonStr(unsigned int reason)
  * @param esf    异常栈帧（架构相关，交给 DumpEsf 处理）
  *
  * Zephyr 默认实现走 LOG_ERR + printk，本项目 CONFIG_LOG/CONSOLE 关闭导致
- * 输出被吞。DUST_LOG_ERR 走异步队列依赖 shell 线程；Log::SendCommandLine
- * 在 DMA 忙时只入池，续发要靠 TX_DONE 中断唤醒 shell 线程，而本 handler
+ * 输出被吞。DUST_LOG_ERR 走异步队列依赖 shell 线程；DUST_LOG_RAW 在 DMA
+ * 忙时只入池，续发要靠 TX_DONE 中断唤醒 shell 线程，而本 handler
  * 内中断已关且随后自旋，第二帧起永远发不出去。因此改用 FatalOut 轮询直发。
  * 架构相关寄存器由 DumpEsf() 输出（实现在子树 drivers/fatal/<vendor>/）。
  * 打印后停机等待复位，不重启以保留现场。
