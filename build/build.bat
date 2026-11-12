@@ -10,20 +10,34 @@ set NAME=%1
 if "%NAME%"=="" set NAME=hpm6e00evk
 
 set "TARGET_DIR="
-if exist "%CD%\CMakeLists.txt" (
-    set "TARGET_DIR=%CD%"
-) else if exist "%CD%\project\CMakeLists.txt" (
-    set "TARGET_DIR=%CD%\project"
-)
+if exist "%CD%\CMakeLists.txt" goto :found_cwd
+if exist "%CD%\framework\project\CMakeLists.txt" goto :found_framework
+if exist "%CD%\project\CMakeLists.txt" goto :found_project
+goto :not_found
 
-if "%TARGET_DIR%"=="" (
-    echo [ERROR] dust build could not locate a project root from:
-    echo         current dir: %CD%
-    echo         expected one of:
-    echo         - %CD%\CMakeLists.txt
-    echo         - %CD%\project\CMakeLists.txt
-    exit /b 1
-)
+:found_cwd
+set "TARGET_DIR=%CD%"
+goto :have_target
+
+:found_framework
+set "TARGET_DIR=%CD%\framework\project"
+goto :have_target
+
+:found_project
+set "TARGET_DIR=%CD%\project"
+goto :have_target
+
+:not_found
+
+echo [ERROR] dust build could not locate a project root from:
+echo         current dir: %CD%
+echo         expected one of:
+echo         - %CD%\CMakeLists.txt
+echo         - %CD%\framework\project\CMakeLists.txt
+echo         - %CD%\project\CMakeLists.txt
+exit /b 1
+
+:have_target
 
 pushd "%TARGET_DIR%"
 

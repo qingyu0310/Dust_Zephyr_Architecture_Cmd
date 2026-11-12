@@ -6,17 +6,16 @@ set "ZEPHYR_BASE=E:\Zephyr\zephyr"
 set "SDK_GLUE_DIR=E:\Zephyr_HPMicro\sdk_glue"
 
 set "TARGET_DIR="
-if exist "%CD%\CMakeLists.txt" (
-    set "TARGET_DIR=%CD%"
-) else if exist "%CD%\project\CMakeLists.txt" (
-    set "TARGET_DIR=%CD%\project"
-)
+if exist "%CD%\CMakeLists.txt" set "TARGET_DIR=%CD%"
+if "%TARGET_DIR%"=="" if exist "%CD%\framework\project\CMakeLists.txt" set "TARGET_DIR=%CD%\framework\project"
+if "%TARGET_DIR%"=="" if exist "%CD%\project\CMakeLists.txt" set "TARGET_DIR=%CD%\project"
 
 if "%TARGET_DIR%"=="" (
     echo [ERROR] dust flash could not locate a project root from:
     echo         current dir: %CD%
     echo         expected one of:
     echo         - %CD%\CMakeLists.txt
+    echo         - %CD%\framework\project\CMakeLists.txt
     echo         - %CD%\project\CMakeLists.txt
     exit /b 1
 )
