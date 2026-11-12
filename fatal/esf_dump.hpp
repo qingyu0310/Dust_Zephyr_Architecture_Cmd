@@ -2,8 +2,11 @@
  * @file esf_dump.hpp
  * @author qingyu
  * @brief 异常栈帧转储接口 — 架构层只声明，实现放在子树 drivers
- * @version 0.2
- * @date 2026-10-21
+ * @version 0.3
+ * @date 2026-11-12
+ *
+ * **本文件属于共享契约层**（见 `contract/README.md`）：底层实现可依赖它，
+ * 上层协议栈可依赖它。P2 步 14 会迁到 `zephyr/contract/`。
  *
  * @copyright Copyright (c) 2026
  *
