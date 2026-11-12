@@ -12,7 +12,7 @@ set(PROJECT_ROOT 	"${CMAKE_CURRENT_SOURCE_DIR}/..")              # <用户区>/
 set(ZEPHYR_USER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../zephyr_user")
 set(FW_ROOT         "${ZEPHYR_USER_DIR}/framework")
 set(MIDLAYER_ROOT   "${ZEPHYR_USER_DIR}/midlayer")
-set(ZEPHYR_ROOT     "${ZEPHYR_USER_DIR}/zephyr")
+set(BOTTOM_ROOT     "${ZEPHYR_USER_DIR}/zephyr")                    # 底层（不可用 ZEPHYR_ROOT，与 CMake 保留变量冲突）
 # 用户工作区内部目录（用户层，framework 六模块平铺用户区根）
 set(APP_ALGORITHM   "${PROJECT_ROOT}/algorithm")                   # <用户区>/algorithm
 set(APP_CMD         "${PROJECT_ROOT}/cmd")                         # <用户区>/cmd
@@ -77,9 +77,9 @@ else()
 endif()
 
 # BOARD_ROOT / SOC_ROOT / DTS_ROOT 指向 zephyr/（底层）
-list(APPEND BOARD_ROOT "${ZEPHYR_ROOT}")
-list(APPEND DTS_ROOT   "${ZEPHYR_ROOT}")
-list(APPEND DTS_ROOT   "${ZEPHYR_ROOT}/dts")
+list(APPEND BOARD_ROOT "${BOTTOM_ROOT}")
+list(APPEND DTS_ROOT   "${BOTTOM_ROOT}")
+list(APPEND DTS_ROOT   "${BOTTOM_ROOT}/dts")
 if(EXISTS "${SDK_GLUE_DIR}")
   	# 用户层与官方并存：同名板卡在用户层加 u 前缀（如 uhpm6e00evk），两边都能构建
   	list(APPEND BOARD_ROOT "${SDK_GLUE_USER_DIR}")
@@ -96,8 +96,8 @@ endif()
 set(ZEPHYR_EXTRA_MODULES
   "${FW_ROOT}"
   "${MIDLAYER_ROOT}"
-  "${ZEPHYR_ROOT}/platform/cmsis"
-  "${ZEPHYR_ROOT}/drivers"
+  "${BOTTOM_ROOT}/platform/cmsis"
+  "${BOTTOM_ROOT}/drivers"
 )
 # sdk_glue 仅存在时加入——st 板卡无 HPM 树
 if(EXISTS "${SDK_GLUE_DIR}")
@@ -126,21 +126,16 @@ project(my_project)
 
 # ============================================================================
 #
-# 装配子树架构（framework 各层 + midlayer + zephyr/drivers）
+# 装配子树架构（三层各自自包含）
 #
 # ============================================================================
 
 if(CONFIG_${CONFIG_SYM})
-  	add_subdirectory(${FW_ROOT}/drivers   ${CMAKE_CURRENT_BINARY_DIR}/framework/drivers)
-  	add_subdirectory(${FW_ROOT}/algorithm ${CMAKE_CURRENT_BINARY_DIR}/framework/algorithm)
-  	add_subdirectory(${FW_ROOT}/modules   ${CMAKE_CURRENT_BINARY_DIR}/framework/modules)
-  	add_subdirectory(${FW_ROOT}/topic     ${CMAKE_CURRENT_BINARY_DIR}/framework/topic)
-  	add_subdirectory(${FW_ROOT}/cmd       ${CMAKE_CURRENT_BINARY_DIR}/framework/cmd)
-  	add_subdirectory(${FW_ROOT}/shell     ${CMAKE_CURRENT_BINARY_DIR}/framework/shell)
-  	add_subdirectory(${FW_ROOT}/init      ${CMAKE_CURRENT_BINARY_DIR}/framework/init)
-
-  	add_subdirectory(${MIDLAYER_ROOT}     ${CMAKE_CURRENT_BINARY_DIR}/midlayer)
-  	add_subdirectory(${ZEPHYR_ROOT}/drivers ${CMAKE_CURRENT_BINARY_DIR}/zephyr/drivers)
+  	# 三层各自自包含：每层根 CMakeLists 负责自己的子目录，本文件只管顺序
+  	# binary 目录名不能叫 zephyr（Zephyr 自己占用 build/zephyr）
+  	add_subdirectory(${BOTTOM_ROOT}   ${CMAKE_CURRENT_BINARY_DIR}/bottom)
+  	add_subdirectory(${MIDLAYER_ROOT} ${CMAKE_CURRENT_BINARY_DIR}/midlayer)
+  	add_subdirectory(${FW_ROOT}       ${CMAKE_CURRENT_BINARY_DIR}/framework)
 endif()
 
 # 业务源码与系统入口（main() 由架构层 init 提供，业务项目不再有 src/）
