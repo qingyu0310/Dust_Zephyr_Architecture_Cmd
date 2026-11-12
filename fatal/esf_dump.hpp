@@ -19,7 +19,7 @@
 /**
  * @brief 转储异常栈帧的架构相关字段
  *
- * 架构层只声明接口；具体实现放在 zephyr_user/drivers/fatal/<vendor>/。
+ * 架构层只声明接口；具体实现放在 zephyr_user/zephyr/drivers/fatal/<vendor>/。
  * fatal.cpp 内提供 __weak 空实现，板卡未选实现时链接不报错。
  *
  * @param esf 异常栈帧（可能为 nullptr）
